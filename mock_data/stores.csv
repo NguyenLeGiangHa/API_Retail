@@ -1,0 +1,11 @@
+store_id,store_name,address,city,store_type,opening_date,region
+1,Downtown Market,"100 Market St",New York,Supermarket,2022-01-15,Northeast
+2,LA Central,"200 Broadway",Los Angeles,Hypermarket,2022-02-20,West
+3,Chicago Express,"300 State St",Chicago,Convenience,2022-03-10,Midwest
+4,Houston Plaza,"400 Main St",Houston,Supermarket,2022-04-05,South
+5,Phoenix Mall,"500 Desert Rd",Phoenix,Mall Store,2022-05-12,Southwest
+6,Philly Shop,"600 Liberty Ave",Philadelphia,Convenience,2022-06-18,Northeast
+7,SA Megastore,"700 River Walk",San Antonio,Hypermarket,2022-07-22,South
+8,SD Outlet,"800 Coast Hwy",San Diego,Outlet,2022-08-30,West
+9,Dallas Center,"900 Commerce St",Dallas,Mall Store,2022-09-14,South
+10,SJ Market,"1000 Valley Way",San Jose,Supermarket,2022-10-25,West 

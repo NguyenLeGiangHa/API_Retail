@@ -1,0 +1,16 @@
+product_line_id,name,category,subcategory,brand,unit_cost
+1,Organic Milk,Dairy,Milk,Nature's Best,2.50
+2,Whole Grain Bread,Bakery,Bread,Healthy Baker,1.80
+3,Fresh Apples,Produce,Fruits,Farm Fresh,0.75
+4,Chicken Breast,Meat,Poultry,Premium Meats,5.99
+5,Pasta Sauce,Pantry,Sauces,Italian's Finest,3.25
+6,Laundry Detergent,Household,Cleaning,Clean & Fresh,8.99
+7,Potato Chips,Snacks,Chips,Crispy's,2.99
+8,Yogurt Pack,Dairy,Yogurt,Dairy Delight,4.50
+9,Ground Coffee,Beverages,Coffee,Morning Brew,6.75
+10,Paper Towels,Household,Paper Products,Home Essentials,4.99
+11,Canned Soup,Pantry,Soups,Comfort Foods,1.99
+12,Fresh Salmon,Seafood,Fish,Ocean Fresh,12.99
+13,Ice Cream,Frozen,Desserts,Sweet Treats,5.49
+14,Baby Diapers,Baby Care,Diapers,Baby Comfort,19.99
+15,Dog Food,Pet Supplies,Dog Care,Pet's Choice,15.99 

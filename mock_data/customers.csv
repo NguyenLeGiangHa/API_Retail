@@ -1,0 +1,11 @@
+customer_id,first_name,last_name,email,phone,gender,birth_date,registration_date,address,city
+31,John,Smith,john.smith@email.com,555-0101,Male,1985-03-15,2023-01-01,"123 Main St",New York
+32,Emma,Johnson,emma.j@email.com,555-0102,Female,1990-07-22,2023-01-02,"456 Oak Ave",Los Angeles
+33,Michael,Brown,mbrown@email.com,555-0103,Male,1988-11-30,2023-01-03,"789 Pine Rd",Chicago
+34,Sarah,Davis,sarah.d@email.com,555-0104,Female,1992-04-18,2023-01-04,"321 Elm St",Houston
+35,David,Wilson,dwilson@email.com,555-0105,Male,1983-09-25,2023-01-05,"654 Maple Dr",Phoenix
+36,Lisa,Anderson,lisa.a@email.com,555-0106,Female,1995-01-12,2023-01-06,"987 Cedar Ln",Philadelphia
+37,James,Taylor,jtaylor@email.com,555-0107,Male,1987-06-08,2023-01-07,"147 Birch Ave",San Antonio
+38,Jennifer,Martinez,jmartinez@email.com,555-0108,Female,1993-12-03,2023-01-08,"258 Spruce St",San Diego
+39,Robert,Thomas,rthomas@email.com,555-0109,Male,1986-08-20,2023-01-09,"369 Willow Rd",Dallas
+40,Maria,Garcia,mgarcia@email.com,555-0110,Female,1991-05-17,2023-01-10,"741 Palm Dr",San Jose 

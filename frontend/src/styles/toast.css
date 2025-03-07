@@ -1,0 +1,27 @@
+/* Custom styles for react-toastify */
+.Toastify__toast {
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.Toastify__toast--success {
+  background: #e8f5e9;
+  color: #1b5e20;
+}
+
+.Toastify__toast--error {
+  background: #ffebee;
+  color: #b71c1c;
+}
+
+.Toastify__progress-bar {
+  height: 3px;
+}
+
+.Toastify__progress-bar--success {
+  background: #4caf50;
+}
+
+.Toastify__progress-bar--error {
+  background: #f44336;
+} 
