@@ -14,6 +14,11 @@
   color: #b71c1c;
 }
 
+.Toastify__toast-body {
+  font-family: 'Roboto', sans-serif;
+  font-size: 14px;
+}
+
 .Toastify__progress-bar {
   height: 3px;
 }

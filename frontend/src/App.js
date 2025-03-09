@@ -63,9 +63,11 @@ function App() {
       const response = await axios.get(`${API_BASE_URL}/api/tables`);
       console.log('Fetched tables:', response.data); // Debug log
       setTables(response.data);
+      setError(null);
     } catch (err) {
-      console.error('Error fetching tables:', err); // Debug log
-      setError('Failed to fetch tables');
+      const errorMessage = err.response?.data?.detail || 'Failed to fetch tables';
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -73,12 +75,10 @@ function App() {
 
   const handleTableChange = (event) => {
     const table = event.target.value;
-    console.log('Selected table:', table); // Debug log
     setSelectedTable(table);
     if (table && tables[table]) {
-      const defaultQuery = `SELECT * FROM ${tables[table].name} LIMIT 5;`;
-      console.log('Setting default query:', defaultQuery); // Debug log
-      setQuery(defaultQuery);
+      // Use a simple SELECT query as default
+      setQuery(`SELECT * FROM ${tables[table].name} LIMIT 5`);
     }
   };
 
@@ -108,49 +108,105 @@ function App() {
   };
 
   const executeQuery = async () => {
+    if (!selectedTable || !query) {
+      toast.error('Please select a table and enter a query');
+      return;
+    }
+
+    if (sourceType === 'postgresql' && !validateConnectionDetails()) {
+      toast.error('Please provide all database connection details');
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/query`, {
+      const requestData = {
+        table: tables[selectedTable].name,
         query: query,
-        source_type: sourceType,
-        connection_details: sourceType === 'postgresql' ? {
-          connection_string: connectionDetails.connectionString,
-        } : null,
-      });
-      setResults(response.data);
-      
-      // Show success toast with mapping details
-      toast.success(
-        <CustomToast
-          type="success"
-          title="Data Mapped Successfully"
-          message="Your data has been processed and mapped to the target table."
-          details={{
-            "Mapped Table": response.data.mapped_table,
-            "Rows Inserted": response.data.row_count,
-            "Processing Time": `${response.data.processing_time}ms`
-          }}
-        />,
-        {
-          position: "top-right",
-          autoClose: 5000,
+        connection_details: {
+          host: connectionDetails.host,
+          port: connectionDetails.port,
+          database: connectionDetails.database,
+          username: connectionDetails.username,
+          password: connectionDetails.password
         }
-      );
+      };
+
+      console.log('Executing query with connection:', {
+        ...requestData,
+        connection_details: {
+          ...requestData.connection_details,
+          password: '***' // Hide password in logs
+        }
+      });
+
+      const response = await axios.post(`${API_BASE_URL}/api/query`, requestData);
+
+      console.log('Query response:', response.data);
+
+      if (response.data.success) {
+        setResults({
+          data: response.data.data,
+          columns: response.data.columns,
+          row_count: response.data.row_count
+        });
+
+        toast.success(
+          `Query executed successfully!\n` +
+          `Retrieved ${response.data.row_count} rows from source database.\n` +
+          `Inserted ${response.data.inserted_count} rows into data warehouse.`
+        );
+      } else {
+        setError('Query executed but returned no results');
+        toast.warning('Query returned no results');
+      }
     } catch (err) {
+      console.error('Query error:', err);
       const errorMessage = err.response?.data?.detail || 'Failed to execute query';
       setError(errorMessage);
-      toast.error(
-        <CustomToast
-          type="error"
-          title="Processing Error"
-          message={errorMessage}
-        />,
-        {
-          position: "top-right",
-          autoClose: 5000,
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const validateConnectionDetails = () => {
+    if (sourceType !== 'postgresql') return true;
+    
+    return (
+      connectionDetails.host &&
+      connectionDetails.port &&
+      connectionDetails.database &&
+      connectionDetails.username &&
+      connectionDetails.password
+    );
+  };
+
+  const testConnection = async () => {
+    if (!validateConnectionDetails()) {
+      toast.error('Please provide all connection details');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await axios.post(`${API_BASE_URL}/api/test-connection`, {
+        connection_details: {
+          host: connectionDetails.host,
+          port: connectionDetails.port,
+          database: connectionDetails.database,
+          username: connectionDetails.username,
+          password: connectionDetails.password
         }
-      );
+      });
+
+      if (response.data.success) {
+        toast.success('Connection successful!');
+      }
+    } catch (err) {
+      const errorMessage = err.response?.data?.detail || 'Connection test failed';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -168,6 +224,11 @@ function App() {
     setLoading(true);
     setError(null);
     try {
+      console.log('Uploading file:', {
+        table: tables[selectedTable].name,
+        fileName: file.name,
+      });
+
       const response = await axios.post(
         `${API_BASE_URL}/api/upload/${tables[selectedTable].name}`,
         formData,
@@ -177,45 +238,27 @@ function App() {
           },
         }
       );
-      setResults({
-        success: true,
-        message: response.data.message,
-        row_count: response.data.rows_inserted
-      });
 
-      // Show success toast for file upload
-      toast.success(
-        <CustomToast
-          type="success"
-          title="File Processed Successfully"
-          message={response.data.message}
-          details={{
-            "Table": tables[selectedTable].name,
-            "Rows Inserted": response.data.rows_inserted
-          }}
-        />,
-        {
-          position: "top-right",
-          autoClose: 5000,
-        }
-      );
+      console.log('Upload response:', response.data);
+      setResults(response.data);
+      
+      if (response.data.success) {
+        toast.success(`Successfully uploaded and processed ${response.data.rows_inserted} rows to ${tables[selectedTable].name}`);
+      }
     } catch (err) {
-      const errorMessage = err.response?.data?.detail || 'Failed to upload file';
+      console.error('Upload error:', err);
+      const errorMessage = err.response?.data?.detail || 'Failed to process file';
       setError(errorMessage);
-      toast.error(
-        <CustomToast
-          type="error"
-          title="File Upload Error"
-          message={errorMessage}
-        />,
-        {
-          position: "top-right",
-          autoClose: 5000,
-        }
-      );
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatCellValue = (value) => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return value.toString();
   };
 
   return (
@@ -299,7 +342,7 @@ function App() {
             variant="contained"
             color="primary"
             onClick={executeQuery}
-            disabled={!query || loading}
+            disabled={!selectedTable || !query || loading}
           >
             Execute Query
           </Button>
@@ -311,9 +354,10 @@ function App() {
               id="file-upload"
               type="file"
               onChange={handleFileChange}
+              disabled={loading}
             />
             <label htmlFor="file-upload">
-              <Button variant="outlined" component="span">
+              <Button variant="outlined" component="span" disabled={loading}>
                 Choose File
               </Button>
             </label>
@@ -338,7 +382,7 @@ function App() {
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
+            {typeof error === 'string' ? error : 'An error occurred'}
           </Alert>
         )}
 
@@ -359,22 +403,30 @@ function App() {
         )}
 
         {results?.data && (
-          <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+          <Paper sx={{ width: '100%', overflow: 'hidden', mt: 2 }}>
             <TableContainer sx={{ maxHeight: 440 }}>
-              <Table stickyHeader>
+              <Table stickyHeader size="small">
                 <TableHead>
                   <TableRow>
                     {results.columns.map((column) => (
-                      <TableCell key={column}>{column}</TableCell>
+                      <TableCell 
+                        key={column}
+                        sx={{ 
+                          fontWeight: 'bold',
+                          backgroundColor: '#f5f5f5'
+                        }}
+                      >
+                        {column}
+                      </TableCell>
                     ))}
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {results.data.map((row, rowIndex) => (
-                    <TableRow key={rowIndex}>
+                    <TableRow key={rowIndex} hover>
                       {results.columns.map((column) => (
                         <TableCell key={`${rowIndex}-${column}`}>
-                          {row[column]}
+                          {formatCellValue(row[column])}
                         </TableCell>
                       ))}
                     </TableRow>
@@ -382,6 +434,11 @@ function App() {
                 </TableBody>
               </Table>
             </TableContainer>
+            <Box sx={{ p: 2, borderTop: '1px solid rgba(224, 224, 224, 1)' }}>
+              <Typography variant="body2" color="text.secondary">
+                Total rows: {results.row_count}
+              </Typography>
+            </Box>
           </Paper>
         )}
 
