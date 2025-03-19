@@ -326,7 +326,7 @@ function App() {
   };
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
+    <Container maxWidth="md" sx={{ py: 4 }}>
       <ToastContainer
         position="top-right"
         autoClose={5000}
@@ -519,7 +519,6 @@ function App() {
       <Dialog 
         open={connectionDialog} 
         onClose={() => {
-          // Only allow closing if we already have a valid connection URL
           if (connectionUrl) {
             setConnectionDialog(false);
           } else {
@@ -527,65 +526,146 @@ function App() {
           }
         }}
         disableEscapeKeyDown={!connectionUrl}
-        maxWidth="md"
+        maxWidth="lg"
         fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.1)'
+          }
+        }}
       >
-        <DialogTitle>PostgreSQL Connection Details</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            Enter your PostgreSQL connection URL in the format:
+        <DialogTitle sx={{ 
+          borderBottom: '1px solid #e0e0e0', 
+          px: 4, 
+          py: 3,
+          bgcolor: '#fafafa'
+        }}>
+          <Typography variant="h5" fontWeight="500">
+            PostgreSQL Connection Details
           </Typography>
-          <Typography variant="body2" fontFamily="monospace" sx={{ mb: 2, p: 1, bgcolor: '#f5f5f5' }}>
-            postgresql://postgres.cyjehsjjvcakeizrehjy:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            This connection uses the Supabase Transaction Pooler (Supavisor), ideal for stateless applications. Connection details will be stored for 1 hour.
-          </Typography>
+        </DialogTitle>
+        
+        <DialogContent sx={{ px: 4, py: 3 }}>
+          <Box sx={{ mb: 4 }}>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 500, color: '#424242' }}>
+              Connection URL Format
+            </Typography>
+            <Paper 
+              variant="outlined" 
+              sx={{ 
+                p: 2, 
+                bgcolor: '#f5f7fa', 
+                borderColor: '#e0e6ed',
+                borderRadius: 1,
+                mb: 2
+              }}
+            >
+              <Typography 
+                variant="body2" 
+                fontFamily="monospace" 
+                sx={{ wordBreak: 'break-all' }}
+              >
+                postgresql://postgres.cyjehsjjvcakeizrehjy:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+              </Typography>
+            </Paper>
+            <Typography variant="body2" color="text.secondary">
+              This connection uses the Supabase Transaction Pooler (Supavisor), ideal for stateless applications.
+              Connection details will be stored securely for 1 hour.
+            </Typography>
+          </Box>
           
-          <TextField
-            label="PostgreSQL Connection URL"
-            value={connectionUrl}
-            onChange={handleConnectionUrlChange}
-            fullWidth
-            required
-            type={showPassword ? 'text' : 'password'}
-            InputProps={{
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton
-                    aria-label="toggle password visibility"
-                    onClick={toggleShowPassword}
-                    edge="end"
-                  >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
-                  </IconButton>
-                </InputAdornment>
-              ),
+          <Box sx={{ mb: 3 }}>
+            <TextField
+              label="PostgreSQL Connection URL"
+              value={connectionUrl}
+              onChange={handleConnectionUrlChange}
+              fullWidth
+              required
+              type={showPassword ? 'text' : 'password'}
+              variant="outlined"
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label="toggle password visibility"
+                      onClick={toggleShowPassword}
+                      edge="end"
+                      sx={{ mr: 0.5 }}
+                    >
+                      {showPassword ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+                sx: { py: 1.5 }  // Taller input field
+              }}
+            />
+          </Box>
+          
+          <Alert 
+            severity="info" 
+            icon={<Box component="span" sx={{ display: 'flex', alignItems: 'center' }}>ℹ️</Box>}
+            sx={{ 
+              bgcolor: '#e3f2fd', 
+              border: '1px solid #bbdefb',
+              borderRadius: 1,
+              '& .MuiAlert-message': {
+                color: '#0d47a1'
+              }
             }}
-            sx={{ mb: 2 }}
-          />
-          
-          <Alert severity="info" sx={{ mt: 2 }}>
-            Make sure your Supabase project allows connections from your current IP address.
+          >
+            <Typography variant="body2">
+              Make sure your Supabase project allows connections from your current IP address.
+              You can configure this in your Supabase project settings.
+            </Typography>
           </Alert>
         </DialogContent>
-        <DialogActions>
+        
+        <DialogActions sx={{ 
+          px: 4, 
+          py: 3,
+          borderTop: '1px solid #e0e0e0',
+          bgcolor: '#fafafa'
+        }}>
           {connectionUrl && (
-            <Button onClick={() => setConnectionDialog(false)}>
+            <Button 
+              onClick={() => setConnectionDialog(false)}
+              sx={{ 
+                color: '#616161',
+                '&:hover': {
+                  bgcolor: 'rgba(0,0,0,0.05)'
+                }
+              }}
+            >
               Cancel
             </Button>
           )}
           <Button 
             onClick={testConnection} 
             disabled={loading || !connectionUrl}
+            variant="outlined"
+            sx={{ 
+              ml: 2,
+              px: 3,
+              py: 1
+            }}
           >
-            Test Connection
+            {loading ? <CircularProgress size={24} /> : 'Test Connection'}
           </Button>
           <Button 
             onClick={handleConnectionSubmit} 
             variant="contained"
             disabled={loading || !connectionUrl}
             color="primary"
+            sx={{ 
+              ml: 2,
+              px: 3,
+              py: 1,
+              bgcolor: '#1976d2',
+              '&:hover': {
+                bgcolor: '#1565c0'
+              }
+            }}
           >
             Connect
           </Button>
