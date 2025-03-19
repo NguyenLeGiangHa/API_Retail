@@ -26,14 +26,20 @@ import {
   DialogActions,
   TextField,
   Chip,
+  InputAdornment,
+  IconButton,
 } from '@mui/material';
 import AceEditor from 'react-ace';
 import 'ace-builds/src-noconflict/mode-sql';
 import 'ace-builds/src-noconflict/theme-github';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import axios from 'axios';
-import { CustomToast } from './components/CustomToast';
 
 const API_BASE_URL = 'http://localhost:8000';
+const CONNECTION_STORAGE_KEY = 'postgres_connection';
+const CONNECTION_EXPIRY_KEY = 'postgres_connection_expiry';
+const ONE_HOUR_MS = 60 * 60 * 1000; // 1 hour in milliseconds
 
 function App() {
   const [selectedTable, setSelectedTable] = useState('');
@@ -43,25 +49,53 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [file, setFile] = useState(null);
-  const [sourceType, setSourceType] = useState('postgresql');
   const [connectionDialog, setConnectionDialog] = useState(false);
-  const [connectionDetails, setConnectionDetails] = useState({
-    host: '',
-    port: '',
-    database: '',
-    username: '',
-    password: '',
-  });
+  const [connectionUrl, setConnectionUrl] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [displayUrl, setDisplayUrl] = useState('');
 
   useEffect(() => {
-    fetchTables();
+    // Check for stored connection details
+    const storedConnection = localStorage.getItem(CONNECTION_STORAGE_KEY);
+    const expiryTime = localStorage.getItem(CONNECTION_EXPIRY_KEY);
+    
+    if (storedConnection && expiryTime) {
+      const now = new Date().getTime();
+      if (now < parseInt(expiryTime)) {
+        // Connection hasn't expired yet
+        setConnectionUrl(storedConnection);
+        updateDisplayUrl(storedConnection);
+        fetchTables();
+      } else {
+        // Connection has expired, show dialog
+        setConnectionDialog(true);
+        // Clear expired storage
+        localStorage.removeItem(CONNECTION_STORAGE_KEY);
+        localStorage.removeItem(CONNECTION_EXPIRY_KEY);
+      }
+    } else {
+      // No stored connection, show dialog
+      setConnectionDialog(true);
+    }
   }, []);
+
+  // Function to update the display URL (hiding password)
+  const updateDisplayUrl = (url) => {
+    try {
+      // Replace password with [HIDDEN] in display URL
+      const regex = /(postgresql:\/\/[^:]+:)([^@]+)(@.*)/;
+      const maskedUrl = url.replace(regex, '$1[HIDDEN]$3');
+      setDisplayUrl(maskedUrl);
+    } catch (e) {
+      setDisplayUrl('Invalid connection URL');
+    }
+  };
 
   const fetchTables = async () => {
     try {
       setLoading(true);
       const response = await axios.get(`${API_BASE_URL}/api/tables`);
-      console.log('Fetched tables:', response.data); // Debug log
+      console.log('Fetched tables:', response.data);
       setTables(response.data);
       setError(null);
     } catch (err) {
@@ -77,26 +111,35 @@ function App() {
     const table = event.target.value;
     setSelectedTable(table);
     if (table && tables[table]) {
-      // Use a simple SELECT query as default
       setQuery(`SELECT * FROM ${tables[table].name} LIMIT 5`);
     }
   };
 
-  const handleSourceTypeChange = (event) => {
-    setSourceType(event.target.value);
-    if (event.target.value === 'postgresql') {
-      setConnectionDialog(true);
-    }
-  };
-
   const handleConnectionSubmit = () => {
-    const connectionString = `postgresql://${connectionDetails.username}:${connectionDetails.password}@${connectionDetails.host}:${connectionDetails.port}/${connectionDetails.database}`;
+    if (!connectionUrl.trim()) {
+      toast.error('Please provide a connection URL');
+      return;
+    }
+
+    // Validate PostgreSQL connection URL format
+    const urlRegex = /^postgresql:\/\/[^:]+:[^@]+@[^:]+:[0-9]+\/[^/]+$/;
+    if (!urlRegex.test(connectionUrl)) {
+      toast.error('Invalid PostgreSQL connection URL format. Expected: postgresql://user:password@host:port/database');
+      return;
+    }
+
+    // Store connection URL with expiry time
+    const now = new Date().getTime();
+    const expiryTime = now + ONE_HOUR_MS;
+    
+    localStorage.setItem(CONNECTION_STORAGE_KEY, connectionUrl);
+    localStorage.setItem(CONNECTION_EXPIRY_KEY, expiryTime.toString());
+    
     setConnectionDialog(false);
-    // Store connection string for later use
-    setConnectionDetails({
-      ...connectionDetails,
-      connectionString,
-    });
+    toast.success('Connection details saved for 1 hour');
+    
+    // Fetch tables after successful connection
+    fetchTables();
   };
 
   const handleQueryChange = (newValue) => {
@@ -113,23 +156,31 @@ function App() {
       return;
     }
 
-    if (sourceType === 'postgresql' && !validateConnectionDetails()) {
-      toast.error('Please provide all database connection details');
+    if (!connectionUrl) {
+      toast.error('Please provide database connection details');
+      setConnectionDialog(true);
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
+      // Extract connection details from URL
+      const url = new URL(connectionUrl);
+      const [username, password] = (url.username + ':' + url.password).split(':');
+      const host = url.hostname;
+      const port = url.port;
+      const database = url.pathname.replace('/', '');
+
       const requestData = {
         table: tables[selectedTable].name,
         query: query,
         connection_details: {
-          host: connectionDetails.host,
-          port: connectionDetails.port,
-          database: connectionDetails.database,
-          username: connectionDetails.username,
-          password: connectionDetails.password
+          host,
+          port,
+          database,
+          username,
+          password
         }
       };
 
@@ -166,39 +217,38 @@ function App() {
       const errorMessage = err.response?.data?.detail || 'Failed to execute query';
       setError(errorMessage);
       toast.error(errorMessage);
+      
+      // If the error is related to connection, show the dialog again
+      if (errorMessage.includes('connection') || errorMessage.includes('Authentication')) {
+        setConnectionDialog(true);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const validateConnectionDetails = () => {
-    if (sourceType !== 'postgresql') return true;
-    
-    return (
-      connectionDetails.host &&
-      connectionDetails.port &&
-      connectionDetails.database &&
-      connectionDetails.username &&
-      connectionDetails.password
-    );
-  };
-
   const testConnection = async () => {
-    if (!validateConnectionDetails()) {
-      toast.error('Please provide all connection details');
+    if (!connectionUrl.trim()) {
+      toast.error('Please provide a connection URL');
       return;
     }
 
     try {
       setLoading(true);
+      
+      // Extract connection details from URL
+      const url = new URL(connectionUrl);
+      const [username, password] = (url.username + ':' + url.password).split(':');
+      const host = url.hostname;
+      const port = url.port;
+      const database = url.pathname.replace('/', '');
+
       const response = await axios.post(`${API_BASE_URL}/api/test-connection`, {
-        connection_details: {
-          host: connectionDetails.host,
-          port: connectionDetails.port,
-          database: connectionDetails.database,
-          username: connectionDetails.username,
-          password: connectionDetails.password
-        }
+        host,
+        port, 
+        database,
+        username,
+        password
       });
 
       if (response.data.success) {
@@ -261,6 +311,20 @@ function App() {
     return value.toString();
   };
 
+  const changeConnection = () => {
+    setConnectionDialog(true);
+  };
+
+  const handleConnectionUrlChange = (e) => {
+    const url = e.target.value;
+    setConnectionUrl(url);
+    updateDisplayUrl(url);
+  };
+
+  const toggleShowPassword = () => {
+    setShowPassword(!showPassword);
+  };
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <ToastContainer
@@ -276,24 +340,27 @@ function App() {
         theme="light"
       />
 
-      <Typography variant="h4" gutterBottom>
-        Retail Analytics Platform
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
+        <Typography variant="h4">
+          Retail Analytics Platform
+        </Typography>
+        <Button 
+          variant="outlined" 
+          onClick={changeConnection}
+        >
+          Change Database Connection
+        </Button>
+      </Box>
+
+      {connectionUrl && displayUrl && (
+        <Paper sx={{ p: 2, mb: 3, bgcolor: '#f8f9fa' }}>
+          <Typography variant="body2" color="text.secondary">
+            Connected to: {displayUrl}
+          </Typography>
+        </Paper>
+      )}
 
       <Box sx={{ mb: 4 }}>
-        <FormControl fullWidth sx={{ mb: 2 }}>
-          <InputLabel>Data Source</InputLabel>
-          <Select
-            value={sourceType}
-            onChange={handleSourceTypeChange}
-            label="Data Source"
-          >
-            <MenuItem value="postgresql">PostgreSQL Database</MenuItem>
-            <MenuItem value="file">CSV/Excel File</MenuItem>
-            <MenuItem value="googlesheets">Google Sheets</MenuItem>
-          </Select>
-        </FormControl>
-
         <FormControl fullWidth sx={{ mb: 2 }}>
           <InputLabel id="table-select-label">Select Table</InputLabel>
           <Select
@@ -449,49 +516,77 @@ function App() {
         )}
       </Box>
 
-      <Dialog open={connectionDialog} onClose={() => setConnectionDialog(false)}>
+      <Dialog 
+        open={connectionDialog} 
+        onClose={() => {
+          // Only allow closing if we already have a valid connection URL
+          if (connectionUrl) {
+            setConnectionDialog(false);
+          } else {
+            toast.error("Please provide a connection URL to continue");
+          }
+        }}
+        disableEscapeKeyDown={!connectionUrl}
+        maxWidth="md"
+        fullWidth
+      >
         <DialogTitle>PostgreSQL Connection Details</DialogTitle>
         <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            Enter your PostgreSQL connection URL in the format:
+          </Typography>
+          <Typography variant="body2" fontFamily="monospace" sx={{ mb: 2, p: 1, bgcolor: '#f5f5f5' }}>
+            postgresql://postgres.cyjehsjjvcakeizrehjy:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            This connection uses the Supabase Transaction Pooler (Supavisor), ideal for stateless applications. Connection details will be stored for 1 hour.
+          </Typography>
+          
           <TextField
-            label="Host"
-            value={connectionDetails.host}
-            onChange={(e) => setConnectionDetails({...connectionDetails, host: e.target.value})}
+            label="PostgreSQL Connection URL"
+            value={connectionUrl}
+            onChange={handleConnectionUrlChange}
             fullWidth
-            margin="normal"
+            required
+            type={showPassword ? 'text' : 'password'}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="toggle password visibility"
+                    onClick={toggleShowPassword}
+                    edge="end"
+                  >
+                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+            sx={{ mb: 2 }}
           />
-          <TextField
-            label="Port"
-            value={connectionDetails.port}
-            onChange={(e) => setConnectionDetails({...connectionDetails, port: e.target.value})}
-            fullWidth
-            margin="normal"
-          />
-          <TextField
-            label="Database"
-            value={connectionDetails.database}
-            onChange={(e) => setConnectionDetails({...connectionDetails, database: e.target.value})}
-            fullWidth
-            margin="normal"
-          />
-          <TextField
-            label="Username"
-            value={connectionDetails.username}
-            onChange={(e) => setConnectionDetails({...connectionDetails, username: e.target.value})}
-            fullWidth
-            margin="normal"
-          />
-          <TextField
-            label="Password"
-            type="password"
-            value={connectionDetails.password}
-            onChange={(e) => setConnectionDetails({...connectionDetails, password: e.target.value})}
-            fullWidth
-            margin="normal"
-          />
+          
+          <Alert severity="info" sx={{ mt: 2 }}>
+            Make sure your Supabase project allows connections from your current IP address.
+          </Alert>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConnectionDialog(false)}>Cancel</Button>
-          <Button onClick={handleConnectionSubmit} variant="contained">
+          {connectionUrl && (
+            <Button onClick={() => setConnectionDialog(false)}>
+              Cancel
+            </Button>
+          )}
+          <Button 
+            onClick={testConnection} 
+            disabled={loading || !connectionUrl}
+          >
+            Test Connection
+          </Button>
+          <Button 
+            onClick={handleConnectionSubmit} 
+            variant="contained"
+            disabled={loading || !connectionUrl}
+            color="primary"
+          >
             Connect
           </Button>
         </DialogActions>
