@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import './styles/toast.css';
+import './styles/segmentation.css';
 import {
   Container,
   Box,
@@ -28,6 +29,8 @@ import {
   Chip,
   InputAdornment,
   IconButton,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import AceEditor from 'react-ace';
 import 'ace-builds/src-noconflict/mode-sql';
@@ -35,6 +38,8 @@ import 'ace-builds/src-noconflict/theme-github';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import axios from 'axios';
+import SegmentsList from './components/SegmentsList';
+import SegmentBuilder from './components/SegmentBuilder';
 
 const API_BASE_URL = 'http://localhost:8000';
 const CONNECTION_STORAGE_KEY = 'postgres_connection';
@@ -53,6 +58,8 @@ function App() {
   const [connectionUrl, setConnectionUrl] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayUrl, setDisplayUrl] = useState('');
+  const [activeTab, setActiveTab] = useState(0);
+  const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
 
   useEffect(() => {
     // Check for stored connection details
@@ -325,8 +332,12 @@ function App() {
     setShowPassword(!showPassword);
   };
 
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+
   return (
-    <Container maxWidth="md" sx={{ py: 4 }}>
+    <Container maxWidth="lg" sx={{ py: 4 }}>
       <ToastContainer
         position="top-right"
         autoClose={5000}
@@ -360,161 +371,180 @@ function App() {
         </Paper>
       )}
 
-      <Box sx={{ mb: 4 }}>
-        <FormControl fullWidth sx={{ mb: 2 }}>
-          <InputLabel id="table-select-label">Select Table</InputLabel>
-          <Select
-            labelId="table-select-label"
-            id="table-select"
-            value={selectedTable}
-            onChange={handleTableChange}
-            label="Select Table"
-            disabled={loading}
-          >
-            {Object.entries(tables).map(([tableName, tableInfo]) => (
-              <MenuItem key={tableName} value={tableName}>
-                {tableName} - {tableInfo.description}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+        <Tabs value={activeTab} onChange={handleTabChange}>
+          <Tab label="Data Modeling" />
+          <Tab label="Segmentation" />
+        </Tabs>
+      </Box>
 
-        <Box sx={{ mb: 2 }}>
-          <Typography variant="h6" gutterBottom>
-            SQL Query
-          </Typography>
-          <AceEditor
-            mode="sql"
-            theme="github"
-            value={query}
-            onChange={handleQueryChange}
-            name="sql-editor"
-            editorProps={{ $blockScrolling: true }}
-            width="100%"
-            height="200px"
-            fontSize={14}
-            showPrintMargin={false}
-            showGutter={true}
-            highlightActiveLine={true}
-            setOptions={{
-              enableBasicAutocompletion: true,
-              enableLiveAutocompletion: true,
-              enableSnippets: true,
-            }}
-          />
-        </Box>
-
-        <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={executeQuery}
-            disabled={!selectedTable || !query || loading}
-          >
-            Execute Query
-          </Button>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <input
-              accept=".csv,.xlsx,.xls"
-              style={{ display: 'none' }}
-              id="file-upload"
-              type="file"
-              onChange={handleFileChange}
+      {activeTab === 0 && (
+        <Box sx={{ mb: 4 }}>
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel id="table-select-label">Select Table</InputLabel>
+            <Select
+              labelId="table-select-label"
+              id="table-select"
+              value={selectedTable}
+              onChange={handleTableChange}
+              label="Select Table"
               disabled={loading}
-            />
-            <label htmlFor="file-upload">
-              <Button variant="outlined" component="span" disabled={loading}>
-                Choose File
-              </Button>
-            </label>
-            {file && (
-              <Button
-                variant="contained"
-                color="secondary"
-                onClick={uploadFile}
-                disabled={loading}
-              >
-                Upload
-              </Button>
-            )}
-          </Box>
-        </Box>
-
-        {loading && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
-            <CircularProgress />
-          </Box>
-        )}
-
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {typeof error === 'string' ? error : 'An error occurred'}
-          </Alert>
-        )}
-
-        {selectedTable && tables[selectedTable] && (
-          <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Table Schema: {selectedTable}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Available fields:
-            </Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-              {tables[selectedTable].fields.map((field) => (
-                <Chip key={field} label={field} variant="outlined" />
+            >
+              {Object.entries(tables).map(([tableName, tableInfo]) => (
+                <MenuItem key={tableName} value={tableName}>
+                  {tableName} - {tableInfo.description}
+                </MenuItem>
               ))}
-            </Box>
-          </Paper>
-        )}
+            </Select>
+          </FormControl>
 
-        {results?.data && (
-          <Paper sx={{ width: '100%', overflow: 'hidden', mt: 2 }}>
-            <TableContainer sx={{ maxHeight: 440 }}>
-              <Table stickyHeader size="small">
-                <TableHead>
-                  <TableRow>
-                    {results.columns.map((column) => (
-                      <TableCell 
-                        key={column}
-                        sx={{ 
-                          fontWeight: 'bold',
-                          backgroundColor: '#f5f5f5'
-                        }}
-                      >
-                        {column}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {results.data.map((row, rowIndex) => (
-                    <TableRow key={rowIndex} hover>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              SQL Query
+            </Typography>
+            <AceEditor
+              mode="sql"
+              theme="github"
+              value={query}
+              onChange={handleQueryChange}
+              name="sql-editor"
+              editorProps={{ $blockScrolling: true }}
+              width="100%"
+              height="200px"
+              fontSize={14}
+              showPrintMargin={false}
+              showGutter={true}
+              highlightActiveLine={true}
+              setOptions={{
+                enableBasicAutocompletion: true,
+                enableLiveAutocompletion: true,
+                enableSnippets: true,
+              }}
+            />
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={executeQuery}
+              disabled={!selectedTable || !query || loading}
+            >
+              Execute Query
+            </Button>
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <input
+                accept=".csv,.xlsx,.xls"
+                style={{ display: 'none' }}
+                id="file-upload"
+                type="file"
+                onChange={handleFileChange}
+                disabled={loading}
+              />
+              <label htmlFor="file-upload">
+                <Button variant="outlined" component="span" disabled={loading}>
+                  Choose File
+                </Button>
+              </label>
+              {file && (
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={uploadFile}
+                  disabled={loading}
+                >
+                  Upload
+                </Button>
+              )}
+            </Box>
+          </Box>
+
+          {loading && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+              <CircularProgress />
+            </Box>
+          )}
+
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {typeof error === 'string' ? error : 'An error occurred'}
+            </Alert>
+          )}
+
+          {selectedTable && tables[selectedTable] && (
+            <Paper sx={{ p: 2, mb: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Table Schema: {selectedTable}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Available fields:
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                {tables[selectedTable].fields.map((field) => (
+                  <Chip key={field} label={field} variant="outlined" />
+                ))}
+              </Box>
+            </Paper>
+          )}
+
+          {results?.data && (
+            <Paper sx={{ width: '100%', overflow: 'hidden', mt: 2 }}>
+              <TableContainer sx={{ maxHeight: 440 }}>
+                <Table stickyHeader size="small">
+                  <TableHead>
+                    <TableRow>
                       {results.columns.map((column) => (
-                        <TableCell key={`${rowIndex}-${column}`}>
-                          {formatCellValue(row[column])}
+                        <TableCell 
+                          key={column}
+                          sx={{ 
+                            fontWeight: 'bold',
+                            backgroundColor: '#f5f5f5'
+                          }}
+                        >
+                          {column}
                         </TableCell>
                       ))}
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-            <Box sx={{ p: 2, borderTop: '1px solid rgba(224, 224, 224, 1)' }}>
-              <Typography variant="body2" color="text.secondary">
-                Total rows: {results.row_count}
-              </Typography>
-            </Box>
-          </Paper>
-        )}
+                  </TableHead>
+                  <TableBody>
+                    {results.data.map((row, rowIndex) => (
+                      <TableRow key={rowIndex} hover>
+                        {results.columns.map((column) => (
+                          <TableCell key={`${rowIndex}-${column}`}>
+                            {formatCellValue(row[column])}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Box sx={{ p: 2, borderTop: '1px solid rgba(224, 224, 224, 1)' }}>
+                <Typography variant="body2" color="text.secondary">
+                  Total rows: {results.row_count}
+                </Typography>
+              </Box>
+            </Paper>
+          )}
 
-        {results?.message && (
-          <Alert severity="success" sx={{ mt: 2 }}>
-            {results.message}
-          </Alert>
-        )}
-      </Box>
+          {results?.message && (
+            <Alert severity="success" sx={{ mt: 2 }}>
+              {results.message}
+            </Alert>
+          )}
+        </Box>
+      )}
+
+      {activeTab === 1 && (
+        <Box>
+          {showSegmentBuilder ? (
+            <SegmentBuilder onBack={() => setShowSegmentBuilder(false)} />
+          ) : (
+            <SegmentsList onCreateSegment={() => setShowSegmentBuilder(true)} />
+          )}
+        </Box>
+      )}
 
       <Dialog 
         open={connectionDialog} 
