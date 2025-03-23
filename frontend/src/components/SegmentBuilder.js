@@ -119,11 +119,15 @@ const TIME_PERIOD_OPTIONS = [
   { value: 'months', label: 'months' }
 ];
 
-const SegmentBuilder = ({ onBack }) => {
+const SegmentBuilder = ({ onBack, editSegment }) => {
+  console.log('🔍 [SegmentBuilder] Received editSegment prop:', editSegment);
+  const isEditMode = !!editSegment;
+  console.log('✏️ [SegmentBuilder] Is in edit mode:', isEditMode);
+
   const [activeTab, setActiveTab] = useState(0);
-  const [segmentName, setSegmentName] = useState('High Value Users (new)');
-  const [segmentId, setSegmentId] = useState(`segment:high-value-users-new`);
-  const [selectedDataset, setSelectedDataset] = useState('Customer Profile');
+  const [segmentName, setSegmentName] = useState(editSegment ? editSegment.name : 'High Value Users (new)');
+  const [segmentId, setSegmentId] = useState(editSegment ? editSegment.id : `segment:high-value-users-new`);
+  const [selectedDataset, setSelectedDataset] = useState(editSegment ? editSegment.dataset : 'Customer Profile');
   const [datasets, setDatasets] = useState({
     'Customer Profile': { name: 'customers', description: 'Customer information', fields: [] },
     'Transactions': { name: 'transactions', description: 'Transaction records', fields: [] },
@@ -137,9 +141,13 @@ const SegmentBuilder = ({ onBack }) => {
     'Stores': ['Transactions'],
     'Product Line': ['Transactions']
   });
-  const [description, setDescription] = useState('');
-  const [showDescriptionField, setShowDescriptionField] = useState(false);
-  const [estimatedSize, setEstimatedSize] = useState({ count: 88, percentage: 22 });
+  const [description, setDescription] = useState(editSegment ? editSegment.description || '' : '');
+  const [showDescriptionField, setShowDescriptionField] = useState(editSegment ? !!editSegment.description : false);
+  const [estimatedSize, setEstimatedSize] = useState(
+    editSegment 
+      ? { count: editSegment.size, percentage: Math.round((editSegment.size / 400) * 100) } 
+      : { count: 88, percentage: 22 }
+  );
   const [attributes, setAttributes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -147,35 +155,39 @@ const SegmentBuilder = ({ onBack }) => {
   
   
   // Conditions state
-  const [rootOperator, setRootOperator] = useState('AND');
-  const [conditions, setConditions] = useState([
-    {
-      id: 1,
-      type: 'attribute',
-      field: 'email',
-      operator: 'is_not_null',
-      value: null
-    }
-  ]);
-  const [conditionGroups, setConditionGroups] = useState([
-    {
-      id: 2,
-      type: 'group',
-      operator: 'AND',
-      conditions: [
-        {
-          id: 3,
-          type: 'event',
-          eventType: 'performed',
-          eventName: 'New Canvas',
-          frequency: 'at_least',
-          count: 3,
-          timePeriod: 'days',
-          timeValue: 90
-        }
-      ]
-    }
-  ]);
+  const [rootOperator, setRootOperator] = useState(editSegment ? editSegment.rootOperator || 'AND' : 'AND');
+  const [conditions, setConditions] = useState(
+    editSegment && editSegment.conditions 
+      ? editSegment.conditions 
+      : [{
+          id: 1,
+          type: 'attribute',
+          field: 'email',
+          operator: 'is_not_null',
+          value: null
+        }]
+  );
+  const [conditionGroups, setConditionGroups] = useState(
+    editSegment && editSegment.conditionGroups 
+      ? editSegment.conditionGroups 
+      : [{
+          id: 2,
+          type: 'group',
+          operator: 'AND',
+          conditions: [
+            {
+              id: 3,
+              type: 'event',
+              eventType: 'performed',
+              eventName: 'New Canvas',
+              frequency: 'at_least',
+              count: 3,
+              timePeriod: 'days',
+              timeValue: 90
+            }
+          ]
+        }]
+  );
   
   // Related segments for inclusions/exclusions
   const [availableSegments, setAvailableSegments] = useState([
@@ -240,7 +252,7 @@ const SegmentBuilder = ({ onBack }) => {
         setInitialDescription(description);
         
         // Show a single toast for the entire initialization
-        toast.success("Tables and fields loaded successfully");
+        toast.success(editSegment ? "Segment loaded for editing" : "Tables and fields loaded successfully");
         
         setLoading(false);
       } catch (error) {
@@ -597,54 +609,67 @@ const SegmentBuilder = ({ onBack }) => {
 
   // Update the handleSaveSegment function to pass the new segment data back to the parent component
   const handleSaveSegment = () => {
-    if (!segmentName.trim()) {
-      toast.error('Please enter a segment name');
-      return;
-    }
-
-    // Create a segment object that matches the format expected by SegmentsList
-    const segmentData = {
-      id: `segment:${segmentId || Math.random().toString(36).substring(2, 11)}`,
-      name: segmentName,
-      description: description || '',
-      dataset: selectedDataset,
-      root_operator: rootOperator,
-      conditions: [...conditions, ...conditionGroups],
-      inclusions: inclusions,
-      exclusions: exclusions,
-      // These fields are required by the SegmentsList component
-      last_updated: new Date().toISOString(),
-      size: estimatedSize?.count || 0,
-      status: 'active'
-    };
-
-    // Debug: Print out constructor of onBack to see what function it is
-    console.log('🔍 [SegmentBuilder] onBack function:', onBack.toString());
-    console.log('💾 [SegmentBuilder] Saving segment data:', segmentData);
-
-    // Try to save to localStorage directly
     try {
-      // Get existing segments or initialize empty array
-      const existingSegments = JSON.parse(localStorage.getItem('segments') || '[]');
+      console.log('💾 [SegmentBuilder] Saving segment, edit mode:', !!editSegment);
       
-      // Add new segment to the beginning of the array
-      const updatedSegments = [segmentData, ...existingSegments];
+      // Create the segment object
+      const segment = {
+        id: segmentId,
+        name: segmentName,
+        dataset: selectedDataset,
+        description: description,
+        last_updated: new Date().toISOString(),
+        size: estimatedSize.count,
+        status: 'active',
+        conditions: conditions,
+        conditionGroups: conditionGroups,
+        rootOperator: rootOperator
+      };
+      
+      console.log('📝 [SegmentBuilder] Saving segment:', segment);
+      
+      // Get existing segments from localStorage
+      const storedSegments = JSON.parse(localStorage.getItem('segments') || '[]');
+      
+      // If this is an edit, update the existing segment
+      if (editSegment) {
+        // Find if this segment already exists in localStorage
+        const existingIndex = storedSegments.findIndex(s => s.id === segment.id);
+        
+        if (existingIndex >= 0) {
+          // Update the existing segment
+          storedSegments[existingIndex] = segment;
+        } else {
+          // Add if it wasn't found (shouldn't happen for edits but just in case)
+          storedSegments.push(segment);
+        }
+        
+        console.log('✅ [SegmentBuilder] Updated existing segment in localStorage');
+      } else {
+        // This is a new segment, just add it
+        storedSegments.push(segment);
+        console.log('✅ [SegmentBuilder] Added new segment to localStorage');
+      }
       
       // Save back to localStorage
-      localStorage.setItem('segments', JSON.stringify(updatedSegments));
-      console.log('💾 [SegmentBuilder] Saved segments to localStorage:', updatedSegments);
+      localStorage.setItem('segments', JSON.stringify(storedSegments));
+      
+      toast.success(`Segment ${editSegment ? 'updated' : 'created'} successfully!`);
+      
+      // Reset unsaved changes flag
+      setHasUnsavedChanges(false);
+      
+      // Send the segment back to the parent component
+      console.log('🔄 [SegmentBuilder] Calling onBack with segment:', segment);
+      if (onBack) {
+        onBack(segment);
+      } else {
+        console.warn('⚠️ [SegmentBuilder] onBack function is not provided');
+      }
     } catch (error) {
-      console.error('❌ [SegmentBuilder] Error saving to localStorage:', error);
+      console.error('❌ [SegmentBuilder] Error saving segment:', error);
+      toast.error('Failed to save segment. Please try again.');
     }
-
-    toast.success(`Segment "${segmentName}" created successfully`);
-    
-    // Log before calling onBack
-    console.log('🔄 [SegmentBuilder] Calling onBack with segment data');
-    onBack(segmentData);
-    
-    // Log after calling onBack to confirm it executed
-    console.log('✅ [SegmentBuilder] onBack called successfully');
   };
 
   // Function to handle root operator change (AND/OR)

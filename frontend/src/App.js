@@ -60,6 +60,8 @@ function App() {
   const [displayUrl, setDisplayUrl] = useState('');
   const [activeTab, setActiveTab] = useState(0);
   const [showSegmentBuilder, setShowSegmentBuilder] = useState(false);
+  const [selectedSegment, setSelectedSegment] = useState(null);
+  const [segments, setSegments] = useState([]);
 
   useEffect(() => {
     // Check for stored connection details
@@ -336,6 +338,47 @@ function App() {
     setActiveTab(newValue);
   };
 
+  const handleEditSegment = (segment) => {
+    console.log('🖊️ [App] Editing segment:', segment);
+    setSelectedSegment(segment);
+    setShowSegmentBuilder(true);
+  };
+
+  const handleBackFromBuilder = (updatedSegment) => {
+    console.log('🔄 [App] Back from builder with segment:', updatedSegment);
+    
+    if (updatedSegment) {
+      // Update segments list
+      setSegments(prevSegments => {
+        if (selectedSegment) {
+          // Update existing segment
+          return prevSegments.map(segment => 
+            segment.id === updatedSegment.id ? updatedSegment : segment
+          );
+        } else {
+          // Add new segment
+          return [updatedSegment, ...prevSegments];
+        }
+      });
+    }
+    
+    setSelectedSegment(null);
+    setShowSegmentBuilder(false);
+  };
+
+  // Load segments from localStorage when the app starts or when viewing the segmentation tab
+  useEffect(() => {
+    if (activeTab === 1) {
+      try {
+        const storedSegments = JSON.parse(localStorage.getItem('segments') || '[]');
+        console.log('🔄 [App] Loaded segments from localStorage:', storedSegments);
+        setSegments(storedSegments);
+      } catch (error) {
+        console.error('❌ [App] Error loading segments from localStorage:', error);
+      }
+    }
+  }, [activeTab]);
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <ToastContainer
@@ -539,9 +582,19 @@ function App() {
       {activeTab === 1 && (
         <Box>
           {showSegmentBuilder ? (
-            <SegmentBuilder onBack={() => setShowSegmentBuilder(false)} />
+            <SegmentBuilder 
+              onBack={handleBackFromBuilder} 
+              editSegment={selectedSegment}
+            />
           ) : (
-            <SegmentsList onCreateSegment={() => setShowSegmentBuilder(true)} />
+            <SegmentsList 
+              segments={segments}
+              onCreateSegment={() => {
+                setSelectedSegment(null);
+                setShowSegmentBuilder(true);
+              }}
+              onEditSegment={handleEditSegment}
+            />
           )}
         </Box>
       )}

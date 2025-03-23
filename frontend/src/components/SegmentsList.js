@@ -24,7 +24,7 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:8000';
 
-const SegmentsList = ({ segments = [], onCreateSegment }) => {
+const SegmentsList = ({ segments = [], onCreateSegment, onEditSegment }) => {
   const [localSegments, setLocalSegments] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -79,6 +79,18 @@ const SegmentsList = ({ segments = [], onCreateSegment }) => {
       month: 'short',
       day: 'numeric'
     });
+  };
+
+  const handleRowClick = (segment) => {
+    console.log('🖱️ [SegmentsList] Row clicked for segment:', segment);
+    console.log('🔍 [SegmentsList] onEditSegment prop exists:', !!onEditSegment);
+    
+    if (onEditSegment) {
+      console.log('📤 [SegmentsList] Calling onEditSegment with segment');
+      onEditSegment(segment);
+    } else {
+      console.warn('⚠️ [SegmentsList] onEditSegment prop is not provided');
+    }
   };
 
   return (
@@ -147,7 +159,12 @@ const SegmentsList = ({ segments = [], onCreateSegment }) => {
           </TableHead>
           <TableBody>
             {filteredSegments.map((segment) => (
-              <TableRow key={segment.id} hover>
+              <TableRow 
+                key={segment.id} 
+                hover
+                onClick={() => handleRowClick(segment)}
+                sx={{ cursor: 'pointer' }}
+              >
                 <TableCell component="th" scope="row">
                   {segment.name}
                 </TableCell>
@@ -162,7 +179,12 @@ const SegmentsList = ({ segments = [], onCreateSegment }) => {
                   />
                 </TableCell>
                 <TableCell align="right">
-                  <IconButton size="small">
+                  <IconButton 
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent row click event
+                    }}
+                  >
                     <MoreHorizIcon fontSize="small" />
                   </IconButton>
                 </TableCell>
