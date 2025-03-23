@@ -200,11 +200,54 @@ const SegmentBuilder = ({ onBack }) => {
   const [previewData, setPreviewData] = useState([]);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // useEffect to fetch initial data
+  // Add these new states for SQL editing
+  const [sqlDialogOpen, setSqlDialogOpen] = useState(false);
+  const [editableSql, setEditableSql] = useState('');
+  const [sqlError, setSqlError] = useState(null);
+
+  // Add an additional useEffect to ensure fields are loaded when the component mounts
   useEffect(() => {
-    fetchDatasets();
-    fetchAvailableSegments();
-  }, []);
+    // This will run once when the component is mounted
+    const initializeData = async () => {
+      try {
+        setLoading(true);
+        
+        // First fetch datasets (tables)
+        const datasets = await fetchDatasets(false); // Pass false to indicate we're initializing
+        
+        // Then ensure we load attributes for the default dataset (Customer Profile)
+        // We need to manually call fetchAttributes here since the useEffect that watches selectedDataset
+        // might not trigger if it's already set to "Customer Profile"
+        if (selectedDataset && datasets) {
+          // Call fetchAttributes but suppress individual toasts since we'll show one comprehensive toast
+          await fetchAttributes(selectedDataset, false, false);
+        }
+        
+        // Show a single toast for the entire initialization
+        toast.success("Tables and fields loaded successfully");
+        
+        setLoading(false);
+      } catch (error) {
+        console.error("Error initializing data:", error);
+        setLoading(false);
+        toast.error("Failed to load data. Please check your connection settings.");
+      }
+    };
+    
+    initializeData();
+  }, []); // Empty dependency array means this runs once on mount
+
+  // useEffect to fetch attributes when dataset changes - but not during initial load
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  
+  useEffect(() => {
+    // Skip the first run which will be handled by initializeData
+    if (initialLoadComplete && selectedDataset) {
+      fetchAttributes(selectedDataset);
+    } else if (selectedDataset) {
+      setInitialLoadComplete(true);
+    }
+  }, [selectedDataset, initialLoadComplete]);
 
   // useEffect to update segmentId when segmentName changes
   useEffect(() => {
@@ -217,102 +260,130 @@ const SegmentBuilder = ({ onBack }) => {
     setSegmentId(`segment:${slug}`);
   }, [segmentName]);
 
-  // useEffect to fetch attributes when dataset changes
-  useEffect(() => {
-    if (selectedDataset) {
-      fetchAttributes(selectedDataset);
-    }
-  }, [selectedDataset]);
-
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
   };
 
-  const fetchDatasets = async () => {
+  // Modify fetchDatasets to return a promise so we can await it
+  // Add showToast parameter to control toast notifications
+  const fetchDatasets = async (showToast = true) => {
     try {
       setLoading(true);
       
-      // Get the connection URL from environment variables or localStorage
-      const connectionUrl = process.env.REACT_APP_CONNECTION_URL || process.env.SEGMENTATION_URL || localStorage.getItem('postgres_connection');
-
+      // Get connection URL from localStorage or environment variable
+      const connectionUrl = process.env.REACT_APP_CONNECTION_URL || 
+                            process.env.SEGMENTATION_URL || 
+                            localStorage.getItem('postgres_connection');
+      
       if (!connectionUrl) {
-        toast.error("Connection URL not configured. Please set the connection URL in your settings or environment variables.");
-      setLoading(false);
-        return;
+        if (showToast) {
+          toast.error("Connection URL not configured. Please set the connection URL in your settings or environment variables.");
+        }
+        setLoading(false);
+        return null;
       }
       
-      // Store in localStorage for consistency with other parts of the application
-      localStorage.setItem('postgres_connection', connectionUrl);
-      
-      console.log("Attempting to fetch tables from PostgreSQL database");
-      
+      // Parse the connection URL to extract components
       try {
-        // Fetch all tables and their columns from the database
+        const url = new URL(connectionUrl);
+        const username = url.username;
+        const password = url.password;
+        const host = url.hostname;
+        const port = url.port;
+        const database = url.pathname.replace('/', '');
+        
+        console.log("Fetching datasets from PostgreSQL database");
+        
+        // Send individual connection components rather than the full connection URL
         const response = await axios.get(`${API_BASE_URL}/api/datasources/postgres/tables`, {
-          params: { connection_url: connectionUrl }
+          params: {
+            host: host,
+            port: port,
+            database: database,
+            username: username,
+            password: password // Will be hashed/masked on the server side
+          }
         });
         
-        if (response.data && Array.isArray(response.data)) {
-          // Transform the response data to match our expected structure
-          const targetTables = ['customers', 'transactions', 'stores', 'product_lines'];
-          const formattedDatasets = {};
-          
-          // Filter and process only the target tables
-          response.data.forEach(table => {
-            const tableName = table.table_name.toLowerCase();
-            if (targetTables.includes(tableName)) {
-              // Create a readable display name (capitalize first letter)
-              const displayName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
-              
-              formattedDatasets[displayName] = { 
-                name: tableName, 
-                description: table.description || `${displayName} information`,
-                schema: table.schema_name || 'public',
-                fields: table.columns || []
-              };
-            }
-          });
-          
-          if (Object.keys(formattedDatasets).length === 0) {
-            toast.warning('No matching tables found in the database. Make sure your connection has proper permissions and the tables exist.');
-          } else {
-            setDatasets(formattedDatasets);
-            
-            // Set the first table as selected if we have results and no selection yet
-            if (Object.keys(formattedDatasets).length > 0 && (!selectedDataset || !formattedDatasets[selectedDataset])) {
-              setSelectedDataset(Object.keys(formattedDatasets)[0]);
-            }
-            
-            toast.success(`Successfully loaded ${Object.keys(formattedDatasets).length} tables from PostgreSQL`);
-          }
-        } else {
-          toast.error('API response format not as expected. Please check the server logs for details.');
-          console.warn('API response format not as expected:', response.data);
-        }
-    } catch (error) {
-        console.error('Error fetching PostgreSQL tables:', error);
-        let errorMessage = 'Failed to load tables from PostgreSQL database';
+        // Process the response data as before
+        console.log(`Found ${response.data.length} tables in database`);
         
-        if (error.response?.data?.detail) {
-          errorMessage = error.response.data.detail;
+        // Filter tables to only include the ones we're interested in
+        const desiredTables = ['customers', 'transactions', 'stores', 'product_lines'];
+        
+        // Process the tables into datasets
+        const processedDatasets = {};
+        for (const tableInfo of response.data) {
+          const { table_name, columns, description, schema_name } = tableInfo;
           
-          // Check for common connection errors and provide more helpful messages
-          if (errorMessage.includes('No such host') || errorMessage.includes('Could not resolve hostname')) {
-            errorMessage = 'Could not connect to the database server. Please verify the hostname in your connection URL.';
-          } else if (errorMessage.includes('Connection refused')) {
-            errorMessage = 'Connection refused. Please verify the port in your connection URL.';
-          } else if (errorMessage.includes('password authentication failed')) {
-            errorMessage = 'Login failed. Please check your username and password in the connection URL.';
+          // Only include tables we're interested in
+          if (desiredTables.includes(table_name.toLowerCase())) {
+            // Create a friendly name for the dataset
+            let datasetName;
+            switch (table_name.toLowerCase()) {
+              case 'customers':
+                datasetName = 'Customer Profile';
+                break;
+              case 'transactions':
+                datasetName = 'Transactions';
+                break;
+              case 'stores':
+                datasetName = 'Stores';
+                break;
+              case 'product_lines':
+                datasetName = 'Product Line';
+                break;
+              default:
+                datasetName = table_name.charAt(0).toUpperCase() + table_name.slice(1);
+            }
+            
+            // Store table information in our datasets state
+            processedDatasets[datasetName] = {
+              name: table_name,
+              schema: schema_name,
+              description: description || `${table_name} data`,
+              fields: columns || []
+            };
           }
         }
         
-        toast.error(errorMessage);
+        console.log("Processed datasets:", Object.keys(processedDatasets));
+        setDatasets(prevDatasets => ({
+          ...prevDatasets,
+          ...processedDatasets
+        }));
+        
+        // Only show toast if we're not in initialization process
+        if (showToast) {
+          toast.success("Tables loaded successfully");
+        }
+        
+        return processedDatasets; // Return the datasets so we can use them if needed
+      } catch (error) {
+        console.error("Error parsing connection URL:", error.message.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@'));
+        if (showToast) {
+          toast.error("Invalid connection URL format");
+        }
+        setLoading(false);
+        return null;
       }
-      
-      setLoading(false);
     } catch (error) {
-      console.error('Unexpected error:', error);
-      toast.error('An unexpected error occurred while fetching data');
+      // Sanitize any error message that might contain the connection URL
+      const sanitizedMessage = error.message?.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+      
+      console.error("Error fetching datasets:", sanitizedMessage);
+      
+      if (showToast) {
+        if (error.response?.data?.detail) {
+          // Sanitize the error detail
+          const sanitizedDetail = error.response.data.detail.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+          toast.error(`Failed to fetch tables: ${sanitizedDetail}`);
+        } else {
+          toast.error(`Failed to fetch tables: ${sanitizedMessage}`);
+        }
+      }
+      return null;
+    } finally {
       setLoading(false);
     }
   };
@@ -327,20 +398,23 @@ const SegmentBuilder = ({ onBack }) => {
     }
   };
 
-  const fetchAttributes = async (datasetName) => {
+  // Update the fetchAttributes function to allow controlling toast notifications
+  const fetchAttributes = async (datasetName, forceRefresh = false, showToast = true) => {
     try {
       setLoading(true);
       
       const tableInfo = datasets[datasetName];
       
       if (!tableInfo) {
-        toast.error(`Table information for ${datasetName} not found`);
+        if (showToast) {
+          toast.error(`Table information for ${datasetName} not found`);
+        }
         setLoading(false);
         return;
       }
       
-      // If we already have fields from the initial fetch, use those
-      if (tableInfo.fields && Array.isArray(tableInfo.fields) && tableInfo.fields.length > 0) {
+      // If we already have fields from the initial fetch AND we're not forcing a refresh, use those
+      if (!forceRefresh && tableInfo.fields && Array.isArray(tableInfo.fields) && tableInfo.fields.length > 0) {
         const formattedAttributes = tableInfo.fields.map(field => ({
           name: field,
           type: determineFieldType(field)
@@ -351,13 +425,93 @@ const SegmentBuilder = ({ onBack }) => {
         return;
       }
       
-      // If no fields, set empty attributes
-      setAttributes([]);
-      toast.warning(`No fields available for ${datasetName}. Try refreshing the data.`);
+      // If fields aren't available or we're forcing a refresh, fetch them from the API
+      const connectionUrl = process.env.REACT_APP_CONNECTION_URL || 
+                          process.env.SEGMENTATION_URL || 
+                          localStorage.getItem('postgres_connection');
+      
+      if (!connectionUrl) {
+        if (showToast) {
+          toast.error("Connection URL not configured. Please set the connection URL in your settings or environment variables.");
+        }
+        setLoading(false);
+        return;
+      }
+      
+      try {
+        const url = new URL(connectionUrl);
+        const tableName = tableInfo.name.toLowerCase();
+        
+        // Parse the connection URL to get individual components
+        const username = url.username;
+        const password = url.password;
+        const host = url.hostname;
+        const port = url.port;
+        const database = url.pathname.replace('/', '');
+        
+        console.log(`Fetching columns for ${tableName}...`);
+        
+        // Fetch columns for the specific table
+        const response = await axios.get(`${API_BASE_URL}/api/datasources/postgres/tables`, {
+          params: {
+            host: host,
+            port: port,
+            database: database,
+            username: username,
+            password: password,
+            table: tableName
+          }
+        });
+        
+        // Find the table in the response
+        const tableData = response.data.find(table => 
+          table.table_name.toLowerCase() === tableName
+        );
+        
+        if (tableData && Array.isArray(tableData.columns) && tableData.columns.length > 0) {
+          // Update the dataset information with the columns
+          setDatasets(prevDatasets => ({
+            ...prevDatasets,
+            [datasetName]: {
+              ...prevDatasets[datasetName],
+              fields: tableData.columns
+            }
+          }));
+          
+          // Create formatted attributes from the column data
+          const formattedAttributes = tableData.columns.map(field => ({
+            name: field,
+            type: determineFieldType(field)
+          }));
+          
+          setAttributes(formattedAttributes);
+          
+          // Only show success toast if requested
+          if (showToast) {
+            toast.success(`Loaded ${formattedAttributes.length} fields for ${datasetName}`);
+          }
+        } else {
+          setAttributes([]);
+          if (showToast) {
+            toast.warning(`No fields found for ${datasetName}. The table might be empty.`);
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching columns for ${datasetName}:`, error);
+        const sanitizedError = error.message?.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+        
+        if (showToast) {
+          toast.error(`Failed to load fields: ${sanitizedError}`);
+        }
+        setAttributes([]);
+      }
+      
       setLoading(false);
     } catch (error) {
       console.error('Error in fetchAttributes:', error);
-      toast.error(`Failed to load attributes for ${datasetName}`);
+      if (showToast) {
+        toast.error(`Failed to load attributes for ${datasetName}`);
+      }
       setLoading(false);
       setAttributes([]);
     }
@@ -1516,13 +1670,13 @@ const SegmentBuilder = ({ onBack }) => {
         return;
       }
       
+      // Only log the query, not the connection details
       console.log("Executing SQL query for preview:", sqlQuery);
       
-      // Parse the connection URL to extract components like in App.js
-      // This follows the same approach used in App.js executeQuery function
       try {
         const url = new URL(connectionUrl);
-        const [username, password] = (url.username + ':' + url.password).split(':');
+        const username = url.username;
+        const password = url.password; // Will be sent securely but not logged
         const host = url.hostname;
         const port = url.port;
         const database = url.pathname.replace('/', '');
@@ -1540,22 +1694,27 @@ const SegmentBuilder = ({ onBack }) => {
           }
         };
         
+        // Log request WITHOUT showing password
         console.log("Sending request to API with connection details:", {
-          ...requestData,
+          table: requestData.table,
+          query: requestData.query,
           connection_details: {
-            ...requestData.connection_details,
-            password: '***' // Hide password in logs
+            host: requestData.connection_details.host,
+            port: requestData.connection_details.port,
+            database: requestData.connection_details.database,
+            username: requestData.connection_details.username,
+            password: "********" // Mask password in logs
           }
         });
         
-        // Call the API endpoint that exists and works with App.js
+        // Call the API endpoint
         const response = await axios.post(`${API_BASE_URL}/api/query`, requestData);
         
-        console.log("Preview API response:", response.data);
+        // Only log the success status, not the full response which might contain sensitive data
+        console.log(`Query executed successfully. Status: ${response.status}, Records: ${response.data?.data?.length || 0}`);
         
-        // Process the response based on the actual API structure
+        // Process the response as before
         if (response.data && response.data.success) {
-          // The app.py endpoint returns data in this format
           setPreviewData(response.data.data || []);
           
           if (response.data.data && response.data.data.length > 0) {
@@ -1568,27 +1727,29 @@ const SegmentBuilder = ({ onBack }) => {
           setPreviewData([]);
         }
       } catch (error) {
-        console.error('Error parsing connection URL or executing query:', error);
+        // Ensure any error messages are sanitized before logging
+        const sanitizedError = error.message?.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+        console.error('Error executing query:', sanitizedError);
         
-        // Handle different error types
+        // Handle different error types without exposing sensitive information
         if (error.response) {
-          // The API responded with an error status
           const errorDetail = error.response.data?.detail || "Unknown error occurred";
-          console.error('Error response:', errorDetail);
-          toast.error(`Query error: ${errorDetail}`);
+          // Sanitize the error message
+          const sanitizedDetail = errorDetail.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+          toast.error(`Query error: ${sanitizedDetail}`);
         } else if (error.request) {
-          // The request was made but no response received
           toast.error("No response from server. Check your network connection.");
-    } else {
-          // Something else went wrong
-          toast.error(`Error: ${error.message}`);
+        } else {
+          toast.error(`Error: ${sanitizedError}`);
         }
         
         setPreviewData([]);
       }
     } catch (error) {
-      console.error('Unexpected error in fetchPreviewData:', error);
-      toast.error(`Unexpected error: ${error.message}`);
+      // Sanitize any unexpected errors
+      const sanitizedError = error.message?.replace(/postgresql:\/\/[^:]+:[^@]+@/g, 'postgresql://****:****@');
+      console.error('Unexpected error:', sanitizedError);
+      toast.error(`Unexpected error: ${sanitizedError}`);
       setPreviewData([]);
     } finally {
       setPreviewLoading(false);
@@ -1699,6 +1860,290 @@ const SegmentBuilder = ({ onBack }) => {
     return String(value);
   };
 
+  // Function to open SQL dialog
+  const handleOpenSqlDialog = () => {
+    const generatedSql = generateSQLPreview();
+    setEditableSql(generatedSql);
+    setSqlError(null);
+    setSqlDialogOpen(true);
+  };
+
+  // Function to close SQL dialog
+  const handleCloseSqlDialog = () => {
+    setSqlDialogOpen(false);
+  };
+
+  // Function to handle SQL changes
+  const handleSqlChange = (e) => {
+    setEditableSql(e.target.value);
+    // Clear any previous errors when user edits
+    setSqlError(null);
+  };
+
+  // Function to apply SQL changes to conditions
+  const handleApplySqlChanges = () => {
+    try {
+      // Simple SQL parser to extract conditions from WHERE clause
+      const sqlQuery = editableSql.trim();
+      
+      // Extract WHERE clause
+      const whereClauseMatch = sqlQuery.match(/WHERE\s+(.*?)(?:\s+LIMIT|\s*$)/is);
+      
+      if (!whereClauseMatch || !whereClauseMatch[1]) {
+        setSqlError("Could not find valid WHERE clause in SQL query");
+        return;
+      }
+      
+      let whereClause = whereClauseMatch[1].trim();
+      
+      // Skip parsing if WHERE clause is just 1=1
+      if (whereClause === '1=1') {
+        toast.info("No conditions to parse in SQL query");
+        handleCloseSqlDialog();
+        return;
+      }
+      
+      // Split by AND/OR operators
+      // This is a simplified parser and won't handle complex nested conditions
+      const conditionOperator = whereClause.toUpperCase().includes(' AND ') ? 'AND' : 'OR';
+      const conditionStatements = whereClause.split(new RegExp(`\\s+${conditionOperator}\\s+`, 'i'));
+      
+      // Set root operator based on SQL
+      setRootOperator(conditionOperator);
+      
+      // Parse each condition
+      const newConditions = conditionStatements.map((statement, index) => {
+        const id = index + 1; // Simple ID assignment
+        
+        // Try to match different SQL patterns
+        let fieldMatch, operatorType, valueMatch;
+        
+        // Parse IS NULL or IS NOT NULL
+        if (/IS\s+NULL/i.test(statement)) {
+          fieldMatch = statement.match(/(\w+)\s+IS\s+NULL/i);
+          if (fieldMatch) {
+            return {
+              id,
+              type: 'attribute',
+              field: fieldMatch[1],
+              operator: 'is_null',
+              value: null
+            };
+          }
+        }
+        
+        if (/IS\s+NOT\s+NULL/i.test(statement)) {
+          fieldMatch = statement.match(/(\w+)\s+IS\s+NOT\s+NULL/i);
+          if (fieldMatch) {
+            return {
+              id,
+              type: 'attribute',
+              field: fieldMatch[1],
+              operator: 'is_not_null',
+              value: null
+            };
+          }
+        }
+        
+        // Parse LIKE conditions
+        if (/LIKE/i.test(statement)) {
+          fieldMatch = statement.match(/(\w+)\s+LIKE\s+['"](.*)["']/i);
+          if (fieldMatch) {
+            const pattern = fieldMatch[2];
+            
+            if (pattern.startsWith('%') && pattern.endsWith('%')) {
+              return {
+                id,
+                type: 'attribute',
+                field: fieldMatch[1],
+                operator: 'contains',
+                value: pattern.slice(1, -1)
+              };
+            } else if (pattern.startsWith('%')) {
+              return {
+                id,
+                type: 'attribute',
+                field: fieldMatch[1],
+                operator: 'ends_with',
+                value: pattern.slice(1)
+              };
+            } else if (pattern.endsWith('%')) {
+              return {
+                id,
+                type: 'attribute',
+                field: fieldMatch[1],
+                operator: 'starts_with',
+                value: pattern.slice(0, -1)
+              };
+            }
+          }
+        }
+        
+        // Parse NOT LIKE conditions
+        if (/NOT\s+LIKE/i.test(statement)) {
+          fieldMatch = statement.match(/(\w+)\s+NOT\s+LIKE\s+['"](.*)["']/i);
+          if (fieldMatch) {
+            return {
+              id,
+              type: 'attribute',
+              field: fieldMatch[1],
+              operator: 'not_contains',
+              value: fieldMatch[2].replace(/%/g, '')
+            };
+          }
+        }
+        
+        // Parse BETWEEN conditions
+        if (/BETWEEN/i.test(statement)) {
+          fieldMatch = statement.match(/(\w+)\s+BETWEEN\s+(.*)\s+AND\s+(.*)/i);
+          if (fieldMatch) {
+            const value1 = fieldMatch[2].trim().replace(/['"]/g, '');
+            const value2 = fieldMatch[3].trim().replace(/['"]/g, '');
+            
+            return {
+              id,
+              type: 'attribute',
+              field: fieldMatch[1],
+              operator: 'between',
+              value: value1,
+              value2: value2
+            };
+          }
+        }
+        
+        // Parse equals conditions
+        const equalsMatch = statement.match(/(\w+)\s*=\s*['"]?([^'"]*?)['"]?$/i);
+        if (equalsMatch) {
+          return {
+            id,
+            type: 'attribute',
+            field: equalsMatch[1],
+            operator: 'equals',
+            value: equalsMatch[2]
+          };
+        }
+        
+        // Parse not equals conditions
+        const notEqualsMatch = statement.match(/(\w+)\s*!=\s*['"]?([^'"]*?)['"]?$/i);
+        if (notEqualsMatch) {
+          return {
+            id,
+            type: 'attribute',
+            field: notEqualsMatch[1],
+            operator: 'not_equals',
+            value: notEqualsMatch[2]
+          };
+        }
+        
+        // Parse greater than conditions
+        const greaterThanMatch = statement.match(/(\w+)\s*>\s*['"]?([^'"]*?)['"]?$/i);
+        if (greaterThanMatch) {
+          return {
+            id,
+            type: 'attribute',
+            field: greaterThanMatch[1],
+            operator: 'greater_than',
+            value: greaterThanMatch[2]
+          };
+        }
+        
+        // Parse less than conditions
+        const lessThanMatch = statement.match(/(\w+)\s*<\s*['"]?([^'"]*?)['"]?$/i);
+        if (lessThanMatch) {
+          return {
+            id,
+            type: 'attribute',
+            field: lessThanMatch[1],
+            operator: 'less_than',
+            value: lessThanMatch[2]
+          };
+        }
+        
+        // If we couldn't parse this condition, return a placeholder
+        return {
+          id,
+          type: 'attribute',
+          field: 'unparsed_field',
+          operator: 'equals',
+          value: statement.trim()
+        };
+      });
+      
+      // Update conditions state
+      setConditions(newConditions);
+      
+      // Clear condition groups to avoid conflicts
+      setConditionGroups([]);
+      
+      toast.success("SQL conditions applied successfully");
+      handleCloseSqlDialog();
+    } catch (error) {
+      console.error("Error parsing SQL:", error);
+      setSqlError("Failed to parse SQL query: " + error.message);
+    }
+  };
+
+  // Function to render SQL dialog
+  const renderSqlDialog = () => {
+    return (
+      <Dialog
+        open={sqlDialogOpen}
+        onClose={handleCloseSqlDialog}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">
+              SQL Query Editor
+            </Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            Edit the SQL query below to modify your segment conditions. Changes will be reflected in the segment builder.
+          </Typography>
+          <TextField
+            fullWidth
+            multiline
+            rows={10}
+            variant="outlined"
+            value={editableSql}
+            onChange={handleSqlChange}
+            error={Boolean(sqlError)}
+            helperText={sqlError}
+            InputProps={{
+              sx: { 
+                fontFamily: 'monospace',
+                fontSize: '0.9rem',
+                whiteSpace: 'pre-wrap'
+              }
+            }}
+            sx={{ mt: 2 }}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            Note: SQL parsing is limited to simple conditions. Complex queries may not parse correctly.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={handleCloseSqlDialog} 
+            color="inherit"
+          >
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleApplySqlChanges}
+            variant="contained"
+            color="primary"
+          >
+            Apply Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+
   // Update the main Definition tab content
   return (
     <Box sx={{ width: '100%' }}>
@@ -1736,6 +2181,7 @@ const SegmentBuilder = ({ onBack }) => {
             variant="outlined" 
             sx={{ mx: 0.5 }}
             startIcon={<CodeIcon />}
+            onClick={handleOpenSqlDialog}
           >
             View SQL
           </Button>
@@ -2117,7 +2563,7 @@ const SegmentBuilder = ({ onBack }) => {
                   </Typography>
                   <IconButton 
                     size="small" 
-                    onClick={() => fetchAttributes(selectedDataset)}
+                    onClick={() => fetchAttributes(selectedDataset, true, true)} // Force refresh and show toast
                     disabled={loading}
                   >
                     <RefreshIcon fontSize="small" />
@@ -2306,6 +2752,9 @@ const SegmentBuilder = ({ onBack }) => {
 
       {/* Preview results dialog */}
       {renderPreviewDialog()}
+
+      {/* SQL Editor dialog */}
+      {renderSqlDialog()}
     </Box>
   );
 };
