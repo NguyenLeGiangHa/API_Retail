@@ -612,7 +612,7 @@ const SegmentBuilder = ({ onBack, editSegment }) => {
     try {
       console.log('💾 [SegmentBuilder] Saving segment, edit mode:', !!editSegment);
       
-      // Create the segment object
+      // Create the segment object with all the current form values
       const segment = {
         id: segmentId,
         name: segmentName,
@@ -637,14 +637,19 @@ const SegmentBuilder = ({ onBack, editSegment }) => {
         const existingIndex = storedSegments.findIndex(s => s.id === segment.id);
         
         if (existingIndex >= 0) {
-          // Update the existing segment
-          storedSegments[existingIndex] = segment;
+          // Update the existing segment by completely replacing it
+          storedSegments[existingIndex] = {
+            ...storedSegments[existingIndex],  // keep any properties we might not have changed
+            ...segment,  // override with all our new values
+            last_updated: new Date().toISOString()  // ensure timestamp is updated
+          };
+          
+          console.log('✅ [SegmentBuilder] Updated existing segment in localStorage');
         } else {
           // Add if it wasn't found (shouldn't happen for edits but just in case)
           storedSegments.push(segment);
+          console.log('✅ [SegmentBuilder] Added new segment to localStorage (edit not found)');
         }
-        
-        console.log('✅ [SegmentBuilder] Updated existing segment in localStorage');
       } else {
         // This is a new segment, just add it
         storedSegments.push(segment);
