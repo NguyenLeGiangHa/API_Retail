@@ -123,9 +123,8 @@ const SegmentBuilder = ({ onBack }) => {
   const [activeTab, setActiveTab] = useState(0);
   const [segmentName, setSegmentName] = useState('High Value Users (new)');
   const [segmentId, setSegmentId] = useState(`segment:high-value-users-new`);
-  const [selectedDataset, setSelectedDataset] = useState('Users');
+  const [selectedDataset, setSelectedDataset] = useState('Customer Profile');
   const [datasets, setDatasets] = useState({
-    'Users': { name: 'users', description: 'User information', fields: [] },
     'Customer Profile': { name: 'customers', description: 'Customer information', fields: [] },
     'Transactions': { name: 'transactions', description: 'Transaction records', fields: [] },
     'Stores': { name: 'stores', description: 'Store information', fields: [] },
@@ -133,7 +132,6 @@ const SegmentBuilder = ({ onBack }) => {
     'Events': { name: 'events', description: 'User event data', fields: [] }
   });
   const [relatedDatasets, setRelatedDatasets] = useState({
-    'Users': ['Events', 'Transactions'],
     'Customer Profile': ['Transactions', 'Events'],
     'Transactions': ['Customer Profile', 'Stores', 'Product Line'],
     'Stores': ['Transactions'],
@@ -197,6 +195,11 @@ const SegmentBuilder = ({ onBack }) => {
   // Tab labels
   const tabs = ["Definition", "Activity", "Syncs", "Overlap"];
 
+  // New states for preview
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   // useEffect to fetch initial data
   useEffect(() => {
     fetchDatasets();
@@ -229,71 +232,75 @@ const SegmentBuilder = ({ onBack }) => {
     try {
       setLoading(true);
       
-      // Try to get the connection URL from environment variables or use a default value
+      // Get the connection URL from environment variables or localStorage
       const connectionUrl = process.env.REACT_APP_CONNECTION_URL || process.env.SEGMENTATION_URL || localStorage.getItem('postgres_connection');
-      
-      // const connectionUrl = process.env.SEGMENTATION_URL
 
       if (!connectionUrl) {
-        // If no connection URL is available, show error message with instructions
         toast.error("Connection URL not configured. Please set the connection URL in your settings or environment variables.");
-        setLoading(false);
+      setLoading(false);
         return;
       }
       
       // Store in localStorage for consistency with other parts of the application
       localStorage.setItem('postgres_connection', connectionUrl);
       
-      console.log("Attempting to fetch tables from Supabase pooler connection");
+      console.log("Attempting to fetch tables from PostgreSQL database");
       
       try {
+        // Fetch all tables and their columns from the database
         const response = await axios.get(`${API_BASE_URL}/api/datasources/postgres/tables`, {
           params: { connection_url: connectionUrl }
         });
         
         if (response.data && Array.isArray(response.data)) {
           // Transform the response data to match our expected structure
-          const formattedDatasets = response.data.reduce((acc, table) => {
-            // Only include the specific tables we're interested in
-            if (['customers', 'transactions', 'stores', 'product_lines'].includes(table.table_name.toLowerCase())) {
-              acc[table.table_name] = { 
-                name: table.table_name, 
-                description: table.description || `${table.table_name} information`,
+          const targetTables = ['customers', 'transactions', 'stores', 'product_lines'];
+          const formattedDatasets = {};
+          
+          // Filter and process only the target tables
+          response.data.forEach(table => {
+            const tableName = table.table_name.toLowerCase();
+            if (targetTables.includes(tableName)) {
+              // Create a readable display name (capitalize first letter)
+              const displayName = tableName.charAt(0).toUpperCase() + tableName.slice(1);
+              
+              formattedDatasets[displayName] = { 
+                name: tableName, 
+                description: table.description || `${displayName} information`,
                 schema: table.schema_name || 'public',
                 fields: table.columns || []
               };
             }
-            return acc;
-          }, {});
+          });
           
           if (Object.keys(formattedDatasets).length === 0) {
-            toast.warning('No matching tables found in the database. Make sure your connection has proper permissions.');
+            toast.warning('No matching tables found in the database. Make sure your connection has proper permissions and the tables exist.');
           } else {
             setDatasets(formattedDatasets);
             
             // Set the first table as selected if we have results and no selection yet
-            if (Object.keys(formattedDatasets).length > 0 && !selectedDataset) {
+            if (Object.keys(formattedDatasets).length > 0 && (!selectedDataset || !formattedDatasets[selectedDataset])) {
               setSelectedDataset(Object.keys(formattedDatasets)[0]);
             }
             
-            toast.success(`Successfully loaded ${Object.keys(formattedDatasets).length} tables from Supabase`);
+            toast.success(`Successfully loaded ${Object.keys(formattedDatasets).length} tables from PostgreSQL`);
           }
         } else {
           toast.error('API response format not as expected. Please check the server logs for details.');
           console.warn('API response format not as expected:', response.data);
         }
-      } catch (error) {
-        console.error('Error fetching Postgres tables:', error);
-        let errorMessage = 'Failed to load tables from Postgres data source';
+    } catch (error) {
+        console.error('Error fetching PostgreSQL tables:', error);
+        let errorMessage = 'Failed to load tables from PostgreSQL database';
         
         if (error.response?.data?.detail) {
           errorMessage = error.response.data.detail;
           
           // Check for common connection errors and provide more helpful messages
           if (errorMessage.includes('No such host') || errorMessage.includes('Could not resolve hostname')) {
-            errorMessage = 'Could not connect to the Supabase pooler. Please verify the hostname in your connection URL.';
+            errorMessage = 'Could not connect to the database server. Please verify the hostname in your connection URL.';
           } else if (errorMessage.includes('Connection refused')) {
-            errorMessage = 'Connection refused. Please verify the port in your pooler connection URL.';
+            errorMessage = 'Connection refused. Please verify the port in your connection URL.';
           } else if (errorMessage.includes('password authentication failed')) {
             errorMessage = 'Login failed. Please check your username and password in the connection URL.';
           }
@@ -332,6 +339,7 @@ const SegmentBuilder = ({ onBack }) => {
         return;
       }
       
+      // If we already have fields from the initial fetch, use those
       if (tableInfo.fields && Array.isArray(tableInfo.fields) && tableInfo.fields.length > 0) {
         const formattedAttributes = tableInfo.fields.map(field => ({
           name: field,
@@ -339,36 +347,41 @@ const SegmentBuilder = ({ onBack }) => {
         }));
         
         setAttributes(formattedAttributes);
-      } else if (tableInfo.columns && Array.isArray(tableInfo.columns) && tableInfo.columns.length > 0) {
-        // Support for new format from Postgres data source
-        const formattedAttributes = tableInfo.columns.map(column => ({
-          name: column,
-          type: determineFieldType(column)
-        }));
-        
-        setAttributes(formattedAttributes);
-      } else {
-        // If fields aren't available, use defaults
-        const defaultFields = getDefaultFieldsForTable(tableInfo.name);
-        
-        const formattedAttributes = defaultFields.map(field => ({
-          name: field,
-          type: determineFieldType(field)
-        }));
-        
-        setAttributes(formattedAttributes);
+        setLoading(false);
+        return;
       }
       
+      // If no fields, set empty attributes
+      setAttributes([]);
+      toast.warning(`No fields available for ${datasetName}. Try refreshing the data.`);
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching attributes:', error);
+      console.error('Error in fetchAttributes:', error);
       toast.error(`Failed to load attributes for ${datasetName}`);
       setLoading(false);
       setAttributes([]);
     }
   };
 
-  const determineFieldType = (fieldName) => {
+  // Improved determineFieldType function that can use PostgreSQL data type information
+  const determineFieldType = (fieldName, dataType = null) => {
+    // If we have the actual data type from PostgreSQL, use it
+    if (dataType) {
+      // Convert PostgreSQL data types to our field types
+      if (dataType.includes('timestamp') || dataType.includes('date') || dataType.includes('time')) {
+        return 'datetime';
+      } else if (dataType.includes('int') || dataType.includes('float') || dataType.includes('numeric') || dataType.includes('decimal') || dataType.includes('double')) {
+        return 'number';
+      } else if (dataType === 'boolean') {
+        return 'boolean';
+      } else if (dataType.includes('array') || dataType.includes('json') || dataType.includes('jsonb')) {
+        return 'array';
+      } else {
+        return 'text';
+      }
+    }
+    
+    // Fallback to field name heuristics
     const lowerField = fieldName.toLowerCase();
     
     if (lowerField.includes('date') || lowerField.includes('time') || lowerField.includes('_at')) {
@@ -388,46 +401,6 @@ const SegmentBuilder = ({ onBack }) => {
       return 'array';
     } else {
       return 'text';
-    }
-  };
-  
-  const getDefaultFieldsForTable = (tableName) => {
-    switch (tableName.toLowerCase()) {
-      case 'customers':
-        return [
-          'customer_id', 'first_name', 'last_name', 'email', 'phone',
-          'gender', 'birth_date', 'registration_date', 'address', 'city',
-          'loyalty_tier', 'total_spent', 'is_active'
-        ];
-      case 'transactions':
-        return [
-          'transaction_id', 'customer_id', 'store_id', 'transaction_date',
-          'total_amount', 'payment_method', 'product_line_id', 'quantity',
-          'unit_price', 'discount_applied', 'is_online'
-        ];
-      case 'stores':
-        return [
-          'store_id', 'store_name', 'address', 'city', 'store_type',
-          'opening_date', 'region', 'square_footage', 'employee_count',
-          'has_online_fulfillment'
-        ];
-      case 'product_lines':
-        return [
-          'product_line_id', 'name', 'category', 'subcategory', 'brand',
-          'unit_cost', 'retail_price', 'tags', 'is_seasonal', 'launch_date'
-        ];
-      case 'events':
-        return [
-          'event_id', 'user_id', 'event_name', 'event_time', 'device', 
-          'platform', 'properties', 'session_id', 'page', 'referrer'
-        ];
-      case 'users':
-        return [
-          'id', 'first_name', 'last_name', 'email', 'created_at',
-          'updated_at', 'team_id', 'version_number', 'team_domain'
-        ];
-      default:
-        return ['id', 'name', 'created_at'];
     }
   };
 
@@ -1439,21 +1412,33 @@ const SegmentBuilder = ({ onBack }) => {
       tableName = `${dataset.schema}.${tableName}`;
     }
     
-    let sql = `SELECT * FROM ${tableName}\nWHERE `;
+    // Start with a simple SELECT statement
+    let sql = `SELECT * FROM ${tableName}`;
     
-    // Add condition SQL
+    // Add WHERE clause for conditions
     const conditionClauses = [];
     
-    // Process attribute conditions
+    // Only process attribute conditions to keep it simple and reliable
     conditions.forEach(condition => {
       if (condition.type === 'attribute' && condition.field && condition.operator) {
         let clause = '';
+        
+        // Get the attribute type to handle different data types correctly
+        const attribute = attributes.find(attr => attr.name === condition.field);
+        const attributeType = attribute ? attribute.type : 'text';
+        const isNumeric = attributeType === 'number';
+        
+        // Handle different operators with proper SQL syntax
         switch (condition.operator) {
           case 'equals':
-            clause = `${condition.field} = '${condition.value}'`;
+            clause = isNumeric 
+              ? `${condition.field} = ${condition.value}` 
+              : `${condition.field} = '${condition.value}'`;
             break;
           case 'not_equals':
-            clause = `${condition.field} != '${condition.value}'`;
+            clause = isNumeric 
+              ? `${condition.field} != ${condition.value}` 
+              : `${condition.field} != '${condition.value}'`;
             break;
           case 'contains':
             clause = `${condition.field} LIKE '%${condition.value}%'`;
@@ -1474,73 +1459,244 @@ const SegmentBuilder = ({ onBack }) => {
             clause = `${condition.field} IS NOT NULL`;
             break;
           case 'greater_than':
-            clause = `${condition.field} > ${condition.value}`;
+            clause = isNumeric 
+              ? `${condition.field} > ${condition.value}` 
+              : `${condition.field} > '${condition.value}'`;
             break;
           case 'less_than':
-            clause = `${condition.field} < ${condition.value}`;
+            clause = isNumeric 
+              ? `${condition.field} < ${condition.value}` 
+              : `${condition.field} < '${condition.value}'`;
             break;
           case 'between':
-            clause = `${condition.field} BETWEEN ${condition.value} AND ${condition.value2 || condition.value}`;
+            if (condition.value && condition.value2) {
+              if (isNumeric) {
+                clause = `${condition.field} BETWEEN ${condition.value} AND ${condition.value2}`;
+              } else {
+                clause = `${condition.field} BETWEEN '${condition.value}' AND '${condition.value2}'`;
+              }
+            }
             break;
-          default:
-            clause = `${condition.field} ${condition.operator} '${condition.value}'`;
         }
+        
+        if (clause) {
         conditionClauses.push(clause);
-      } else if (condition.type === 'event' && condition.eventName) {
-        let clause = '';
-        if (condition.eventType === 'performed') {
-          clause = `EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${tableName}.id\n      AND events.event_name = '${condition.eventName}'`;
-          
-          if (condition.timeValue && condition.timePeriod) {
-            clause += `\n      AND events.created_at >= NOW() - INTERVAL '${condition.timeValue} ${condition.timePeriod}'`;
-          }
-          
-          if (condition.frequency && condition.count) {
-            clause += `\n    GROUP BY events.user_id\n    HAVING COUNT(*) ${condition.frequency === 'at_least' ? '>=' : condition.frequency === 'at_most' ? '<=' : '='} ${condition.count}`;
-          }
-          
-          clause += '\n  )';
-        } else if (condition.eventType === 'not_performed') {
-          clause = `NOT EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${tableName}.id\n      AND events.event_name = '${condition.eventName}'`;
-          
-          if (condition.timeValue && condition.timePeriod) {
-            clause += `\n      AND events.created_at >= NOW() - INTERVAL '${condition.timeValue} ${condition.timePeriod}'`;
-          }
-          
-          clause += '\n  )';
         }
-        conditionClauses.push(clause);
-      } else if (condition.type === 'related' && condition.relatedDataset) {
-        let relatedTable = condition.relatedDataset.toLowerCase();
-        let clause = `EXISTS (\n    SELECT 1\n    FROM ${relatedTable}\n    WHERE ${relatedTable}.${selectedDataset.toLowerCase()}_id = ${tableName}.id\n  )`;
-        conditionClauses.push(clause);
       }
     });
     
-    // Add inclusions
-    if (inclusions.length > 0) {
-      const inclusionClauses = inclusions.map(segment => {
-        return `id IN (SELECT id FROM ${segment.id})`;
-      });
-      conditionClauses.push(inclusionClauses.join(` ${rootOperator} `));
-    }
-    
-    // Add exclusions
-    if (exclusions.length > 0) {
-      const exclusionClauses = exclusions.map(segment => {
-        return `id NOT IN (SELECT id FROM ${segment.id})`;
-      });
-      conditionClauses.push(exclusionClauses.join(` AND `));
-    }
-    
-    if (conditionClauses.length === 0) {
-      sql += '1=1'; // Default true condition if no conditions are present
+    // Add the WHERE clause if we have conditions
+    if (conditionClauses.length > 0) {
+      sql += `\nWHERE ${conditionClauses.join(`\n  ${rootOperator} `)}`;
     } else {
-      sql += conditionClauses.join(`\n  ${rootOperator} `);
+      // Use WHERE 1=1 if no conditions to ensure we get results
+      sql += '\nWHERE 1=1';
     }
     
-    sql += '\nLIMIT 1000;';
+    // Add limit to prevent returning too many rows
+    sql += '\nLIMIT 100';
+    
     return sql;
+  };
+
+  // Function to fetch preview data based on current conditions
+  const fetchPreviewData = async () => {
+    setPreviewLoading(true);
+    setPreviewOpen(true); // Open dialog immediately to show loading state
+    
+    try {
+      const sqlQuery = generateSQLPreview();
+      
+      // Get connection URL from localStorage
+      const connectionUrl = localStorage.getItem('postgres_connection');
+      
+      if (!connectionUrl) {
+        toast.error("Connection URL not configured. Please set the connection URL first.");
+        setPreviewLoading(false);
+        return;
+      }
+      
+      console.log("Executing SQL query for preview:", sqlQuery);
+      
+      // Parse the connection URL to extract components like in App.js
+      // This follows the same approach used in App.js executeQuery function
+      try {
+        const url = new URL(connectionUrl);
+        const [username, password] = (url.username + ':' + url.password).split(':');
+        const host = url.hostname;
+        const port = url.port;
+        const database = url.pathname.replace('/', '');
+        
+        // Format request data to match what the API expects
+        const requestData = {
+          table: datasets[selectedDataset].name,
+          query: sqlQuery,
+          connection_details: {
+            host,
+            port,
+            database,
+            username,
+            password
+          }
+        };
+        
+        console.log("Sending request to API with connection details:", {
+          ...requestData,
+          connection_details: {
+            ...requestData.connection_details,
+            password: '***' // Hide password in logs
+          }
+        });
+        
+        // Call the API endpoint that exists and works with App.js
+        const response = await axios.post(`${API_BASE_URL}/api/query`, requestData);
+        
+        console.log("Preview API response:", response.data);
+        
+        // Process the response based on the actual API structure
+        if (response.data && response.data.success) {
+          // The app.py endpoint returns data in this format
+          setPreviewData(response.data.data || []);
+          
+          if (response.data.data && response.data.data.length > 0) {
+            toast.success(`Retrieved ${response.data.data.length} records`);
+          } else {
+            toast.warning("Query executed successfully but returned no records");
+          }
+        } else {
+          toast.warning("No results returned. Your query may be too restrictive or there's no matching data.");
+          setPreviewData([]);
+        }
+      } catch (error) {
+        console.error('Error parsing connection URL or executing query:', error);
+        
+        // Handle different error types
+        if (error.response) {
+          // The API responded with an error status
+          const errorDetail = error.response.data?.detail || "Unknown error occurred";
+          console.error('Error response:', errorDetail);
+          toast.error(`Query error: ${errorDetail}`);
+        } else if (error.request) {
+          // The request was made but no response received
+          toast.error("No response from server. Check your network connection.");
+    } else {
+          // Something else went wrong
+          toast.error(`Error: ${error.message}`);
+        }
+        
+        setPreviewData([]);
+      }
+    } catch (error) {
+      console.error('Unexpected error in fetchPreviewData:', error);
+      toast.error(`Unexpected error: ${error.message}`);
+      setPreviewData([]);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+  
+  // Function to handle closing the preview dialog
+  const handleClosePreview = () => {
+    setPreviewOpen(false);
+  };
+  
+  // Function to render the preview dialog
+  const renderPreviewDialog = () => {
+    // Determine columns based on the first result row
+    const columns = previewData.length > 0 
+      ? Object.keys(previewData[0]).filter(col => col !== '__rowid__')
+      : [];
+      
+    return (
+      <Dialog
+        open={previewOpen}
+        onClose={handleClosePreview}
+        maxWidth="lg"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">
+              Preview Results
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {previewData.length > 0 
+                ? `Showing ${previewData.length} records` 
+                : previewLoading 
+                  ? 'Loading...' 
+                  : 'No records found'}
+            </Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers sx={{ minHeight: 300 }}>
+          {previewLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 3 }}>
+              <Typography>Loading preview data...</Typography>
+            </Box>
+          ) : previewData.length === 0 ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 3, textAlign: 'center' }}>
+              <Typography color="text.secondary">
+                No results match your current conditions. Try adjusting your filters or check your database connection.
+              </Typography>
+            </Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 400 }}>
+              <Table stickyHeader size="small">
+                <TableHead>
+                  <TableRow>
+                    {columns.map(column => (
+                      <TableCell key={column}>
+                        {column}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {previewData.map((row, rowIndex) => (
+                    <TableRow hover key={row.__rowid__ || rowIndex}>
+                      {columns.map(column => (
+                        <TableCell key={`${rowIndex}-${column}`}>
+                          {formatCellValue(row[column])}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            variant="outlined"
+            startIcon={<CodeIcon />}
+            onClick={() => {
+              const sql = generateSQLPreview();
+              navigator.clipboard.writeText(sql);
+              toast.success('SQL query copied to clipboard');
+              console.log('SQL Query:', sql);
+            }}
+          >
+            Copy SQL
+          </Button>
+          <Button onClick={handleClosePreview}>Close</Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+  
+  // Helper function to format cell values for display
+  const formatCellValue = (value) => {
+    if (value === null || value === undefined) return '-';
+    if (typeof value === 'object') {
+      try {
+        return JSON.stringify(value);
+      } catch (e) {
+        return String(value);
+      }
+    }
+    if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+    return String(value);
   };
 
   // Update the main Definition tab content
@@ -1586,8 +1742,10 @@ const SegmentBuilder = ({ onBack }) => {
           <Button 
             variant="outlined" 
             sx={{ mx: 0.5 }}
+            onClick={fetchPreviewData}
+            disabled={previewLoading}
           >
-            Preview Results
+            {previewLoading ? 'Loading...' : 'Preview Results'}
           </Button>
           <Button
             variant="outlined"
@@ -1688,26 +1846,26 @@ const SegmentBuilder = ({ onBack }) => {
                     renderValue={(selected) => {
                       const dataset = datasets[selected] || {};
                       return (
-                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                          <Box component="span" sx={{ 
-                            display: 'inline-flex', 
-                            alignItems: 'center', 
-                            justifyContent: 'center',
-                            width: 24,
-                            height: 24,
-                            bgcolor: '#f0f0f0',
-                            borderRadius: '4px',
-                            mr: 1.5,
-                            color: '#666'
-                          }}>
-                            <span>{selected.charAt(0)}</span>
-                          </Box>
-                          {selected}
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Box component="span" sx={{ 
+                          display: 'inline-flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center',
+                          width: 24,
+                          height: 24,
+                          bgcolor: '#f0f0f0',
+                          borderRadius: '4px',
+                          mr: 1.5,
+                          color: '#666'
+                        }}>
+                          <span>{selected.charAt(0)}</span>
+                        </Box>
+                        {selected}
                           {dataset.schema && dataset.schema !== 'public' && (
                             <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
                               ({dataset.schema})
                             </Typography>
-                          )}
+                    )}
                         </Box>
                       );
                     }}
@@ -1729,7 +1887,7 @@ const SegmentBuilder = ({ onBack }) => {
                             <span>{name.charAt(0)}</span>
                           </Box>
                           <Box>
-                            {name}
+                          {name}
                             {info.schema && info.schema !== 'public' && (
                               <Typography variant="caption" display="block" color="text.secondary">
                                 {info.schema}
@@ -2145,6 +2303,9 @@ const SegmentBuilder = ({ onBack }) => {
 
       {/* Segment selector dialog */}
       {renderSegmentSelectorDialog()}
+
+      {/* Preview results dialog */}
+      {renderPreviewDialog()}
     </Box>
   );
 };
