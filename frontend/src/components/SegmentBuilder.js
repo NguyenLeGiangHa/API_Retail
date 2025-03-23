@@ -228,12 +228,84 @@ const SegmentBuilder = ({ onBack }) => {
   const fetchDatasets = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/api/tables`);
-      setDatasets(response.data);
+      
+      // Try to get the connection URL from environment variables or use a default value
+      const connectionUrl = process.env.REACT_APP_CONNECTION_URL || process.env.SEGMENTATION_URL || localStorage.getItem('postgres_connection');
+      
+      // const connectionUrl = process.env.SEGMENTATION_URL
+
+      if (!connectionUrl) {
+        // If no connection URL is available, show error message with instructions
+        toast.error("Connection URL not configured. Please set the connection URL in your settings or environment variables.");
+        setLoading(false);
+        return;
+      }
+      
+      // Store in localStorage for consistency with other parts of the application
+      localStorage.setItem('postgres_connection', connectionUrl);
+      
+      console.log("Attempting to fetch tables from Supabase pooler connection");
+      
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/datasources/postgres/tables`, {
+          params: { connection_url: connectionUrl }
+        });
+        
+        if (response.data && Array.isArray(response.data)) {
+          // Transform the response data to match our expected structure
+          const formattedDatasets = response.data.reduce((acc, table) => {
+            // Only include the specific tables we're interested in
+            if (['customers', 'transactions', 'stores', 'product_lines'].includes(table.table_name.toLowerCase())) {
+              acc[table.table_name] = { 
+                name: table.table_name, 
+                description: table.description || `${table.table_name} information`,
+                schema: table.schema_name || 'public',
+                fields: table.columns || []
+              };
+            }
+            return acc;
+          }, {});
+          
+          if (Object.keys(formattedDatasets).length === 0) {
+            toast.warning('No matching tables found in the database. Make sure your connection has proper permissions.');
+          } else {
+            setDatasets(formattedDatasets);
+            
+            // Set the first table as selected if we have results and no selection yet
+            if (Object.keys(formattedDatasets).length > 0 && !selectedDataset) {
+              setSelectedDataset(Object.keys(formattedDatasets)[0]);
+            }
+            
+            toast.success(`Successfully loaded ${Object.keys(formattedDatasets).length} tables from Supabase`);
+          }
+        } else {
+          toast.error('API response format not as expected. Please check the server logs for details.');
+          console.warn('API response format not as expected:', response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching Postgres tables:', error);
+        let errorMessage = 'Failed to load tables from Postgres data source';
+        
+        if (error.response?.data?.detail) {
+          errorMessage = error.response.data.detail;
+          
+          // Check for common connection errors and provide more helpful messages
+          if (errorMessage.includes('No such host') || errorMessage.includes('Could not resolve hostname')) {
+            errorMessage = 'Could not connect to the Supabase pooler. Please verify the hostname in your connection URL.';
+          } else if (errorMessage.includes('Connection refused')) {
+            errorMessage = 'Connection refused. Please verify the port in your pooler connection URL.';
+          } else if (errorMessage.includes('password authentication failed')) {
+            errorMessage = 'Login failed. Please check your username and password in the connection URL.';
+          }
+        }
+        
+        toast.error(errorMessage);
+      }
+      
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching datasets:', error);
-      toast.error('Failed to load datasets');
+      console.error('Unexpected error:', error);
+      toast.error('An unexpected error occurred while fetching data');
       setLoading(false);
     }
   };
@@ -264,6 +336,14 @@ const SegmentBuilder = ({ onBack }) => {
         const formattedAttributes = tableInfo.fields.map(field => ({
           name: field,
           type: determineFieldType(field)
+        }));
+        
+        setAttributes(formattedAttributes);
+      } else if (tableInfo.columns && Array.isArray(tableInfo.columns) && tableInfo.columns.length > 0) {
+        // Support for new format from Postgres data source
+        const formattedAttributes = tableInfo.columns.map(column => ({
+          name: column,
+          type: determineFieldType(column)
         }));
         
         setAttributes(formattedAttributes);
@@ -1351,7 +1431,15 @@ const SegmentBuilder = ({ onBack }) => {
 
   // Function to generate SQL preview
   const generateSQLPreview = () => {
-    let sql = `SELECT * FROM ${datasets[selectedDataset]?.name || selectedDataset.toLowerCase()}\nWHERE `;
+    const dataset = datasets[selectedDataset];
+    let tableName = dataset?.name || selectedDataset.toLowerCase();
+    
+    // Add schema prefix if it exists and is not 'public'
+    if (dataset?.schema && dataset.schema !== 'public') {
+      tableName = `${dataset.schema}.${tableName}`;
+    }
+    
+    let sql = `SELECT * FROM ${tableName}\nWHERE `;
     
     // Add condition SQL
     const conditionClauses = [];
@@ -1401,7 +1489,7 @@ const SegmentBuilder = ({ onBack }) => {
       } else if (condition.type === 'event' && condition.eventName) {
         let clause = '';
         if (condition.eventType === 'performed') {
-          clause = `EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${datasets[selectedDataset]?.name || selectedDataset.toLowerCase()}.id\n      AND events.event_name = '${condition.eventName}'`;
+          clause = `EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${tableName}.id\n      AND events.event_name = '${condition.eventName}'`;
           
           if (condition.timeValue && condition.timePeriod) {
             clause += `\n      AND events.created_at >= NOW() - INTERVAL '${condition.timeValue} ${condition.timePeriod}'`;
@@ -1413,7 +1501,7 @@ const SegmentBuilder = ({ onBack }) => {
           
           clause += '\n  )';
         } else if (condition.eventType === 'not_performed') {
-          clause = `NOT EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${datasets[selectedDataset]?.name || selectedDataset.toLowerCase()}.id\n      AND events.event_name = '${condition.eventName}'`;
+          clause = `NOT EXISTS (\n    SELECT 1\n    FROM events\n    WHERE events.user_id = ${tableName}.id\n      AND events.event_name = '${condition.eventName}'`;
           
           if (condition.timeValue && condition.timePeriod) {
             clause += `\n      AND events.created_at >= NOW() - INTERVAL '${condition.timeValue} ${condition.timePeriod}'`;
@@ -1423,7 +1511,8 @@ const SegmentBuilder = ({ onBack }) => {
         }
         conditionClauses.push(clause);
       } else if (condition.type === 'related' && condition.relatedDataset) {
-        let clause = `EXISTS (\n    SELECT 1\n    FROM ${condition.relatedDataset.toLowerCase()}\n    WHERE ${condition.relatedDataset.toLowerCase()}.${selectedDataset.toLowerCase()}_id = ${datasets[selectedDataset]?.name || selectedDataset.toLowerCase()}.id\n  )`;
+        let relatedTable = condition.relatedDataset.toLowerCase();
+        let clause = `EXISTS (\n    SELECT 1\n    FROM ${relatedTable}\n    WHERE ${relatedTable}.${selectedDataset.toLowerCase()}_id = ${tableName}.id\n  )`;
         conditionClauses.push(clause);
       }
     });
@@ -1596,24 +1685,32 @@ const SegmentBuilder = ({ onBack }) => {
                         pt: 1.2
                       } 
                     }}
-                    renderValue={(selected) => (
-                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                        <Box component="span" sx={{ 
-                          display: 'inline-flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center',
-                          width: 24,
-                          height: 24,
-                          bgcolor: '#f0f0f0',
-                          borderRadius: '4px',
-                          mr: 1.5,
-                          color: '#666'
-                        }}>
-                          <span>{selected.charAt(0)}</span>
+                    renderValue={(selected) => {
+                      const dataset = datasets[selected] || {};
+                      return (
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          <Box component="span" sx={{ 
+                            display: 'inline-flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            width: 24,
+                            height: 24,
+                            bgcolor: '#f0f0f0',
+                            borderRadius: '4px',
+                            mr: 1.5,
+                            color: '#666'
+                          }}>
+                            <span>{selected.charAt(0)}</span>
+                          </Box>
+                          {selected}
+                          {dataset.schema && dataset.schema !== 'public' && (
+                            <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                              ({dataset.schema})
+                            </Typography>
+                          )}
                         </Box>
-                        {selected}
-                      </Box>
-                    )}
+                      );
+                    }}
                   >
                     {Object.entries(datasets).map(([name, info]) => (
                       <MenuItem key={name} value={name}>
@@ -1631,7 +1728,14 @@ const SegmentBuilder = ({ onBack }) => {
                           }}>
                             <span>{name.charAt(0)}</span>
                           </Box>
-                          {name}
+                          <Box>
+                            {name}
+                            {info.schema && info.schema !== 'public' && (
+                              <Typography variant="caption" display="block" color="text.secondary">
+                                {info.schema}
+                              </Typography>
+                            )}
+                          </Box>
                         </Box>
                       </MenuItem>
                     ))}
