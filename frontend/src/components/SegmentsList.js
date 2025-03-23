@@ -24,52 +24,53 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:8000';
 
-const SegmentsList = ({ onCreateSegment }) => {
-  const [segments, setSegments] = useState([
-    {
-      id: 'segment:champions',
-      name: 'Champions',
-      dataset: 'Customer Profile',
-      last_updated: '2023-05-15T12:00:00Z',
-      size: 1234,
-      status: 'active'
-    },
-    {
-      id: 'segment:loyal-customers',
-      name: 'Loyal Customers',
-      dataset: 'Customer Profile',
-      last_updated: '2023-05-10T09:30:00Z',
-      size: 5678,
-      status: 'active'
-    },
-    {
-      id: 'segment:at-risk',
-      name: 'At Risk',
-      dataset: 'Customer Profile',
-      last_updated: '2023-05-05T14:45:00Z',
-      size: 432,
-      status: 'active'
-    }
-  ]);
+const SegmentsList = ({ segments = [], onCreateSegment }) => {
+  const [localSegments, setLocalSegments] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Fetch segments (mock implementation)
+  console.log('📋 [SegmentsList] Received segments prop:', segments);
+
+  // Load segments from localStorage on mount
   useEffect(() => {
-    // In a real implementation, you would fetch segments from your API
-    // For now, we'll use the static segments defined above
-    console.log('Segments loaded');
-  }, []);
+    try {
+      const storedSegments = JSON.parse(localStorage.getItem('segments') || '[]');
+      console.log('🔄 [SegmentsList] Loaded segments from localStorage:', storedSegments);
+      
+      // Combine with any segments passed as props, avoiding duplicates
+      const combinedSegments = [...segments];
+      
+      storedSegments.forEach(storedSegment => {
+        if (!combinedSegments.some(s => s.id === storedSegment.id)) {
+          combinedSegments.push(storedSegment);
+        }
+      });
+      
+      setLocalSegments(combinedSegments);
+      console.log('📊 [SegmentsList] Combined segments:', combinedSegments);
+    } catch (error) {
+      console.error('❌ [SegmentsList] Error loading segments from localStorage:', error);
+    }
+  }, [segments]); // Re-run when segments prop changes
+
+  // When segments change
+  useEffect(() => {
+    console.log('📊 [SegmentsList] Local segments updated, length:', localSegments.length);
+  }, [localSegments]);
+
+  // When about to render
+  const filteredSegments = localSegments.filter(segment => 
+    segment.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    segment.dataset.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+  console.log('🔍 [SegmentsList] Filtered segments, length:', filteredSegments.length);
+  
+  // Just before returning the component
+  console.log('🔄 [SegmentsList] About to render table with data');
 
   const handleSearch = (e) => {
     setSearchTerm(e.target.value);
   };
-
-  // Filter segments by search term
-  const filteredSegments = segments.filter(segment => 
-    segment.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    segment.dataset.toLowerCase().includes(searchTerm.toLowerCase())
-  );
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);

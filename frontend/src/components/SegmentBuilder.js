@@ -205,6 +205,15 @@ const SegmentBuilder = ({ onBack }) => {
   const [editableSql, setEditableSql] = useState('');
   const [sqlError, setSqlError] = useState(null);
 
+  // Add this new state to track if there are unsaved changes
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [initialConditions, setInitialConditions] = useState([]);
+  const [initialConditionGroups, setInitialConditionGroups] = useState([]);
+  const [initialRootOperator, setInitialRootOperator] = useState('AND');
+  const [initialSegmentName, setInitialSegmentName] = useState('High Value Users (new)');
+  const [initialDescription, setInitialDescription] = useState('');
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+
   // Add an additional useEffect to ensure fields are loaded when the component mounts
   useEffect(() => {
     // This will run once when the component is mounted
@@ -222,6 +231,13 @@ const SegmentBuilder = ({ onBack }) => {
           // Call fetchAttributes but suppress individual toasts since we'll show one comprehensive toast
           await fetchAttributes(selectedDataset, false, false);
         }
+        
+        // Save initial state of conditions for "Discard Changes" functionality
+        setInitialConditions([...conditions]);
+        setInitialConditionGroups([...conditionGroups]);
+        setInitialRootOperator(rootOperator);
+        setInitialSegmentName(segmentName);
+        setInitialDescription(description);
         
         // Show a single toast for the entire initialization
         toast.success("Tables and fields loaded successfully");
@@ -579,29 +595,56 @@ const SegmentBuilder = ({ onBack }) => {
       });
   };
 
+  // Update the handleSaveSegment function to pass the new segment data back to the parent component
   const handleSaveSegment = () => {
     if (!segmentName.trim()) {
       toast.error('Please enter a segment name');
       return;
     }
 
+    // Create a segment object that matches the format expected by SegmentsList
     const segmentData = {
-      id: segmentId,
+      id: `segment:${segmentId || Math.random().toString(36).substring(2, 11)}`,
       name: segmentName,
-      description: description || null,
+      description: description || '',
       dataset: selectedDataset,
       root_operator: rootOperator,
       conditions: [...conditions, ...conditionGroups],
       inclusions: inclusions,
       exclusions: exclusions,
-      estimated_size: estimatedSize
+      // These fields are required by the SegmentsList component
+      last_updated: new Date().toISOString(),
+      size: estimatedSize?.count || 0,
+      status: 'active'
     };
 
-    // In a real app, you would post to API
-    console.log('Saving segment data:', segmentData);
+    // Debug: Print out constructor of onBack to see what function it is
+    console.log('🔍 [SegmentBuilder] onBack function:', onBack.toString());
+    console.log('💾 [SegmentBuilder] Saving segment data:', segmentData);
+
+    // Try to save to localStorage directly
+    try {
+      // Get existing segments or initialize empty array
+      const existingSegments = JSON.parse(localStorage.getItem('segments') || '[]');
+      
+      // Add new segment to the beginning of the array
+      const updatedSegments = [segmentData, ...existingSegments];
+      
+      // Save back to localStorage
+      localStorage.setItem('segments', JSON.stringify(updatedSegments));
+      console.log('💾 [SegmentBuilder] Saved segments to localStorage:', updatedSegments);
+    } catch (error) {
+      console.error('❌ [SegmentBuilder] Error saving to localStorage:', error);
+    }
 
     toast.success(`Segment "${segmentName}" created successfully`);
-    onBack();
+    
+    // Log before calling onBack
+    console.log('🔄 [SegmentBuilder] Calling onBack with segment data');
+    onBack(segmentData);
+    
+    // Log after calling onBack to confirm it executed
+    console.log('✅ [SegmentBuilder] onBack called successfully');
   };
 
   // Function to handle root operator change (AND/OR)
@@ -2144,6 +2187,101 @@ const SegmentBuilder = ({ onBack }) => {
     );
   };
 
+  // Add effect to track changes
+  useEffect(() => {
+    // Check if current state differs from initial state
+    const conditionsChanged = JSON.stringify(conditions) !== JSON.stringify(initialConditions);
+    const groupsChanged = JSON.stringify(conditionGroups) !== JSON.stringify(initialConditionGroups);
+    const operatorChanged = rootOperator !== initialRootOperator;
+    const nameChanged = segmentName !== initialSegmentName;
+    const descriptionChanged = description !== initialDescription;
+    
+    setHasUnsavedChanges(
+      conditionsChanged || 
+      groupsChanged || 
+      operatorChanged || 
+      nameChanged || 
+      descriptionChanged
+    );
+  }, [
+    conditions, 
+    conditionGroups, 
+    rootOperator, 
+    segmentName, 
+    description, 
+    initialConditions, 
+    initialConditionGroups, 
+    initialRootOperator, 
+    initialSegmentName, 
+    initialDescription
+  ]);
+
+  // Add function to handle discarding changes
+  const handleDiscardChanges = () => {
+    // If there are no unsaved changes, just go back
+    if (!hasUnsavedChanges) {
+      onBack();
+      return;
+    }
+    
+    // Otherwise, open confirmation dialog
+    setDiscardConfirmOpen(true);
+  };
+
+  // Add function to confirm discarding changes
+  const confirmDiscardChanges = () => {
+    // Reset all conditions to initial state
+    setConditions([...initialConditions]);
+    setConditionGroups([...initialConditionGroups]);
+    setRootOperator(initialRootOperator);
+    setSegmentName(initialSegmentName);
+    setDescription(initialDescription);
+    
+    // If description was empty initially, hide the description field
+    if (!initialDescription) {
+      setShowDescriptionField(false);
+    }
+    
+    setHasUnsavedChanges(false);
+    setDiscardConfirmOpen(false);
+    
+    toast.info("Changes have been discarded");
+  };
+
+  // Add function to cancel discarding changes
+  const cancelDiscardChanges = () => {
+    setDiscardConfirmOpen(false);
+  };
+
+  // Add function to render discard confirmation dialog
+  const renderDiscardConfirmDialog = () => {
+    return (
+      <Dialog
+        open={discardConfirmOpen}
+        onClose={cancelDiscardChanges}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Discard Changes?
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1">
+            You have unsaved changes. Are you sure you want to discard all changes?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={cancelDiscardChanges} color="primary">
+            Cancel
+          </Button>
+          <Button onClick={confirmDiscardChanges} color="error" variant="contained">
+            Discard Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
+
   // Update the main Definition tab content
   return (
     <Box sx={{ width: '100%' }}>
@@ -2197,6 +2335,8 @@ const SegmentBuilder = ({ onBack }) => {
             variant="outlined"
             color="inherit"
             sx={{ mx: 0.5 }}
+            onClick={handleDiscardChanges}
+            disabled={!hasUnsavedChanges}
           >
             Discard Changes
           </Button>
@@ -2205,6 +2345,7 @@ const SegmentBuilder = ({ onBack }) => {
             color="primary"
             onClick={handleSaveSegment}
             sx={{ mx: 0.5 }}
+            disabled={!hasUnsavedChanges || !segmentName.trim()}
           >
             Save Segment
           </Button>
@@ -2755,6 +2896,9 @@ const SegmentBuilder = ({ onBack }) => {
 
       {/* SQL Editor dialog */}
       {renderSqlDialog()}
+
+      {/* Discard confirmation dialog */}
+      {renderDiscardConfirmDialog()}
     </Box>
   );
 };

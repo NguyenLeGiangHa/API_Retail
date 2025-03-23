@@ -8,6 +8,8 @@ import logging
 from datetime import datetime, date
 import numpy as np
 from sqlalchemy import text
+import re
+import hashlib
 
 from .database import get_supabase, create_source_connection
 
@@ -27,7 +29,32 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
 )
+
+# Add this class to filter sensitive information from logs
+class SensitiveFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.msg, str):
+            # Mask PostgreSQL connection URLs in logs
+            record.msg = re.sub(
+                r'postgresql:\/\/([^:]+):([^@]+)@', 
+                r'postgresql://\1:********@', 
+                record.msg
+            )
+            
+            # Mask connection_url query parameters
+            record.msg = re.sub(
+                r'connection_url=postgresql:\/\/([^:]+):([^@]+)@', 
+                r'connection_url=postgresql://\1:********@', 
+                record.msg
+            )
+            
+            # Mask password parameters
+            record.msg = re.sub(r'password=([^&\s]+)', r'password=********', record.msg)
+        return True
+
+# Configure logging with the sensitive filter
 logger = logging.getLogger(__name__)
+logger.addFilter(SensitiveFilter())
 
 # Schema mappings for each table
 SCHEMA_MAPPINGS = {
@@ -347,4 +374,192 @@ async def test_connection(request: ConnectionDetails):
         raise HTTPException(
             status_code=400,
             detail=f"Connection failed: {str(e)}"
-        ) 
+        )
+
+@app.get("/api/datasources/postgres/tables")
+async def get_postgres_tables(
+    connection_url: Optional[str] = None,
+    host: Optional[str] = None,
+    port: Optional[str] = None,
+    database: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None
+):
+    """Get available tables from the connected Postgres data source"""
+    source_db = None
+    try:
+        logger.info("Starting get_postgres_tables endpoint")
+        
+        # Determine connection method (URL or individual parameters)
+        if host and port and database and username and password:
+            # Using individual parameters
+            connection_details = {
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                # Create a hashed representation of password for logging
+                "password_hash": hashlib.sha256(password.encode()).hexdigest()[:8] + "..."
+            }
+            logger.info(f"Using provided connection parameters for {username}@{host}:{port}/{database}")
+            
+            try:
+                source_db = create_source_connection(
+                    host=host,
+                    port=port,
+                    database=database,
+                    username=username,
+                    password=password
+                )
+                logger.info(f"Successfully connected to PostgreSQL at {host}:{port}/{database}")
+            except Exception as e:
+                sanitized_error = str(e).replace(password, "********") if password else str(e)
+                logger.error(f"Error connecting to database: {sanitized_error}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to connect to database. Please verify your connection details."
+                )
+                
+        elif connection_url:
+            # Using connection URL - redact sensitive parts for logging
+            masked_url = re.sub(
+                r'postgresql:\/\/([^:]+):([^@]+)@', 
+                r'postgresql://\1:********@', 
+                connection_url
+            )
+            logger.info(f"Using connection URL: {masked_url}")
+            
+            # Parse the connection URL to extract connection details
+            try:
+                logger.info(f"Parsing connection URL (masked): postgresql://****:****@{masked_url.split('@')[1] if '@' in masked_url else 'invalid-url'}")
+                
+                # Handle both standard and pooler connection URLs
+                url = masked_url.replace("postgresql://", "")
+                
+                # Split into credentials and host_info
+                if "@" in url:
+                    credentials, host_info = url.split("@", 1)
+                else:
+                    logger.error("Connection URL missing '@' separator")
+                    raise ValueError("Connection URL missing '@' separator")
+                    
+                # Parse username and password
+                if ":" in credentials:
+                    username, password = credentials.split(":", 1)
+                else:
+                    username = credentials
+                    password = ""
+                    logger.warning("No password found in connection string")
+                    
+                # Parse host, port, and database
+                if "/" in host_info:
+                    host_port, database = host_info.split("/", 1)
+                else:
+                    host_port = host_info
+                    database = "postgres"
+                    logger.warning(f"No database specified in connection URL, using default: {database}")
+                    
+                # Parse host and port
+                if ":" in host_port:
+                    host, port = host_port.split(":", 1)
+                else:
+                    host = host_port
+                    port = "5432"  # Default PostgreSQL port
+                    logger.warning(f"No port specified in connection URL, using default: {port}")
+                
+            except Exception as e:
+                logger.error(f"Error parsing connection URL: {str(e)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid connection URL format. For pooler connections, use: postgresql://postgres.[ref]:[password]@[region].pooler.supabase.com:[port]/[database]. Error: {str(e)}"
+                )
+            
+            logger.info(f"Attempting to connect to PostgreSQL at {host}:{port}/{database} with user {username}")
+            
+            # Create connection using parsed details
+            try:
+                source_db = create_source_connection(
+                    host=host,
+                    port=port,
+                    database=database,
+                    username=username,
+                    password=password
+                )
+                logger.info("Successfully connected to PostgreSQL database")
+            except Exception as e:
+                logger.error(f"Error connecting to database: {str(e)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to connect to database. Please verify your connection URL is correct. Error: {str(e)}"
+                )
+            
+        else:
+            logger.warning("No connection details provided")
+            raise HTTPException(
+                status_code=400, 
+                detail="No connection details provided. Please provide either a PostgreSQL connection URL or individual connection parameters."
+            )
+        
+        # Query to get all tables and columns
+        try:
+            logger.info("Executing query to fetch tables and columns")
+            query = text("""
+                SELECT 
+                    t.table_schema as schema_name,
+                    t.table_name,
+                    c.column_name,
+                    pg_catalog.obj_description(pgc.oid, 'pg_class') as description
+                FROM 
+                    information_schema.tables t
+                JOIN 
+                    information_schema.columns c ON t.table_name = c.table_name AND t.table_schema = c.table_schema
+                JOIN 
+                    pg_catalog.pg_class pgc ON pgc.relname = t.table_name
+                WHERE 
+                    t.table_schema NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY 
+                    t.table_schema, t.table_name, c.ordinal_position
+            """)
+            
+            result = source_db.execute(query)
+            columns = result.keys()
+            rows = result.fetchall()
+            logger.info(f"Query returned {len(rows)} rows")
+            
+            # Process results into a structured format
+            tables = {}
+            for row in rows:
+                schema_name, table_name, column_name, description = row
+                
+                table_key = f"{schema_name}.{table_name}"
+                
+                if table_key not in tables:
+                    tables[table_key] = {
+                        "schema_name": schema_name,
+                        "table_name": table_name,
+                        "description": description or f"{table_name} table",
+                        "columns": []
+                    }
+                
+                tables[table_key]["columns"].append(column_name)
+            
+            logger.info(f"Successfully processed {len(tables)} tables")
+            # Simply return the results - don't try to insert into Supabase
+            return list(tables.values())
+            
+        except Exception as e:
+            logger.error(f"Error executing table query: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error querying tables: {str(e)}"
+            )
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        logger.error(f"Unexpected error in get_postgres_tables: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+    finally:
+        if source_db:
+            logger.info("Closing database connection")
+            source_db.close() 
